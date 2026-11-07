@@ -15,6 +15,7 @@ import { validateSafeExternalUrl } from '@banana/shared';
 import {
   computeEmbedding384,
   cosineSimilarity,
+  downloadVideoFromExternalUrl,
   ensureFixtureVideo,
   executeAiClippingJob,
   generateThumbnailFfmpeg,
@@ -919,11 +920,18 @@ export async function createBananaApiApp(): Promise<Express> {
       });
     }
 
-    // Provision a real playable media file for authorized import testing / pipeline processing
+    // Download real video from YouTube, Facebook, Twitch, Kick or direct MP4 URL via yt-dlp
     const videoId = crypto.randomUUID();
     const objectKey = `url_import_${videoId}.mp4`;
     const finalPath = path.join(storageRoot, 'banana-videos', objectKey);
-    ensureFixtureVideo(finalPath, 30);
+    const dlResult = downloadVideoFromExternalUrl({
+      url: validation.normalizedUrl!,
+      outputPath: finalPath,
+    });
+    const resolvedTitle =
+      req.body?.title && req.body.title !== 'Video desde URL autorizada'
+        ? String(req.body.title).trim()
+        : dlResult.downloadedTitle || title;
     const meta = probeMediaWithFfprobe(finalPath);
 
     const storageObjectId = crypto.randomUUID();
@@ -934,12 +942,12 @@ export async function createBananaApiApp(): Promise<Express> {
     );
 
     const thumbRel = `banana-thumbnails/video_${videoId}.jpg`;
-    generateThumbnailFfmpeg(finalPath, path.join(storageRoot, thumbRel), 1.0);
+    generateThumbnailFfmpeg(finalPath, path.join(storageRoot, thumbRel), Math.min(1.0, meta.durationSeconds / 3));
 
     await db.query(
       `INSERT INTO "Video" ("id", "userId", "title", "originalFilename", "storageObjectId", "thumbnailPath", "status")
        VALUES ($1, $2, $3, $4, $5, $6, 'READY')`,
-      [videoId, req.user!.sub, title, objectKey, storageObjectId, thumbRel]
+      [videoId, req.user!.sub, resolvedTitle, objectKey, storageObjectId, thumbRel]
     );
 
     await db.query(
@@ -970,7 +978,7 @@ export async function createBananaApiApp(): Promise<Express> {
     return res.status(201).json({
       video: {
         id: videoId,
-        title,
+        title: resolvedTitle,
         originUrl: validation.normalizedUrl,
         storageObjectId,
         metadata: meta,

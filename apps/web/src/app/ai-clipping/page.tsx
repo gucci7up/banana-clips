@@ -38,6 +38,7 @@ export default function AiClippingPage() {
   const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '1:1' | '4:5'>('9:16');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState('');
+  const [externalUrl, setExternalUrl] = useState('');
   const [activeJob, setActiveJob] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [sortByScore, setSortByScore] = useState(true);
@@ -69,7 +70,18 @@ export default function AiClippingPage() {
     setBusy(true);
     try {
       let videoIdToProcess = selectedVideoId;
-      if (uploadFile) {
+      if (externalUrl.trim()) {
+        const urlUp = await apiFetch<{ video: { id: string } }>('/uploads/from-url', {
+          method: 'POST',
+          body: JSON.stringify({
+            url: externalUrl.trim(),
+            title: uploadTitle.trim() || undefined,
+          }),
+        });
+        videoIdToProcess = urlUp.video.id;
+        setSelectedVideoId(videoIdToProcess);
+        setExternalUrl('');
+      } else if (uploadFile) {
         const fd = new FormData();
         fd.append('file', uploadFile);
         fd.append('title', uploadTitle || uploadFile.name);
@@ -82,7 +94,7 @@ export default function AiClippingPage() {
       }
 
       if (!videoIdToProcess) {
-        throw new Error('Selecciona o sube un video MP4/MOV/MKV/WEBM primero.');
+        throw new Error('Pega una URL de YouTube/Facebook, sube un archivo MP4/MOV o selecciona un video de la biblioteca.');
       }
 
       const finalDuration = useCustomDuration ? customDuration : targetDurationSec;
@@ -151,15 +163,45 @@ export default function AiClippingPage() {
             <Scissors className="h-4 w-4" /> Configurar Recorte Inteligente
           </h2>
 
+          <div className="rounded-xl border border-[#FFD43B]/40 bg-[#111318] p-3 space-y-2">
+            <label className="block text-xs font-bold text-[#FFD43B]">
+              Opción A: Pegar URL de YouTube, Facebook, Twitch o Kick (yt-dlp)
+            </label>
+            <input
+              type="url"
+              data-testid="ai-clipping-url-input"
+              value={externalUrl}
+              onChange={(e) => {
+                setExternalUrl(e.target.value);
+                if (e.target.value) setUploadFile(null);
+              }}
+              placeholder="https://www.youtube.com/watch?v=... o https://www.facebook.com/watch/?v=..."
+              className="w-full rounded-xl border border-slate-700 bg-[#1B1E25] p-2.5 text-xs text-[#F8FAFC] focus:border-[#FFD43B] focus:outline-none"
+            />
+            {externalUrl && (
+              <input
+                type="text"
+                value={uploadTitle}
+                onChange={(e) => setUploadTitle(e.target.value)}
+                placeholder="Título opcional (si lo dejas vacío se extrae de YouTube/Facebook)"
+                className="w-full rounded-xl border border-slate-700 bg-[#1B1E25] p-2 text-xs"
+              />
+            )}
+          </div>
+
           <div>
             <label className="block text-xs font-semibold text-[#94A3B8]">
-              Opción A: Subir nuevo video (MP4, MOV, MKV, WEBM)
+              Opción B: Subir archivo local (MP4, MOV, MKV, WEBM)
             </label>
             <input
               type="file"
               accept=".mp4,.mov,.mkv,.webm,video/*"
               data-testid="ai-clipping-file-input"
-              onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null;
+                setUploadFile(f);
+                if (f) setExternalUrl('');
+              }}
               className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2 text-xs"
             />
             {uploadFile && (
@@ -175,7 +217,7 @@ export default function AiClippingPage() {
 
           <div>
             <label className="block text-xs font-semibold text-[#94A3B8]">
-              Opción B: Seleccionar video existente en biblioteca
+              Opción C: Seleccionar video existente en biblioteca
             </label>
             <select
               value={selectedVideoId}
