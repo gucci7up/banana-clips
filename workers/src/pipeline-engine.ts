@@ -551,14 +551,10 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       '--no-playlist',
       '--no-warnings',
       '--no-check-certificates',
-      '--socket-timeout',
-      '15',
-      '--retries',
-      '2',
-      '--max-filesize',
-      '180M',
+      '--download-sections',
+      `*0-${params.maxDurationSeconds || 180}`,
       '-f',
-      '18/22/best[height<=720][ext=mp4]/best[height<=720]/best',
+      'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best',
       '--merge-output-format',
       'mp4',
       '-o',
@@ -566,7 +562,7 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       params.url,
     ];
 
-    await runCommandAsync('yt-dlp', dlArgs, 60000);
+    await runCommandAsync('yt-dlp', dlArgs, 240000);
     if (fs.existsSync(params.outputPath) && fs.statSync(params.outputPath).size > 10000) {
       // Optional non-blocking pass to fetch VTT captions if available without affecting the video file
       try {

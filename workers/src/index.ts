@@ -556,7 +556,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
 
     const maxClipsToProduce = 3;
     const clipLen =
-      totalDur >= requestedDurationSec
+      totalDur >= requestedDurationSec * 2
         ? requestedDurationSec
         : Number(Math.max(4, totalDur / maxClipsToProduce).toFixed(2));
 
