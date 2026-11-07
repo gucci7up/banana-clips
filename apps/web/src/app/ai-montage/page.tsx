@@ -40,6 +40,44 @@ interface StorySceneSpec {
 const DEFAULT_IDEA =
   'Intentó abrir la puerta de todas las formas posibles (tirando, con una palanca, con una patada voladora) excepto empujando hacia adentro';
 
+const VIRAL_STORY_PRESETS = [
+  {
+    id: 'door_push',
+    badge: '🚪 La Puerta (Stickman)',
+    title: 'He Tried EVERYTHING… Except Pushing 😂🚪 #Shorts',
+    idea: 'Intentó abrir la puerta de todas las formas posibles (tirando, con una palanca, con una patada voladora) excepto empujando hacia adentro',
+    style: 'STICKMAN_COMEDY',
+  },
+  {
+    id: 'gym_weight',
+    badge: '🏋️‍♂️ El Gimnasio (Stickman)',
+    title: 'Never Show Off at the Gym 😂🏋️‍♂️ Stickman #Shorts',
+    idea: 'Un stickman flaco intenta levantar una pesa gigante de 500 kilos en el gimnasio para impresionar a todos, hace un esfuerzo extremo y luego una niña pasa y la levanta con una sola mano como si fuera de espuma',
+    style: 'STICKMAN_COMEDY',
+  },
+  {
+    id: 'spider_panic',
+    badge: '🕷️ La Araña Pequeña',
+    title: 'One Tiny Spider vs Stickman 😂🕷️ #Shorts',
+    idea: 'Un stickman ve una araña diminuta en la pared de su habitación, entra en pánico total, usa una escoba, un lanzallamas cómico, destruye media habitación y al final la araña solo quería saludarlo con un sombrerito',
+    style: 'STICKMAN_COMEDY',
+  },
+  {
+    id: 'mosquito_night',
+    badge: '🦟 El Mosquito a las 3 AM',
+    title: '3 AM Mosquito Battle 😂🦟 Stickman #Shorts',
+    idea: 'Un stickman intenta dormir a las 3 de la mañana pero un mosquito le zumba en la oreja, intenta atraparlo con almohadas, raquetas eléctricas y trampas locas sin poder dormir hasta que amanece',
+    style: 'STICKMAN_COMEDY',
+  },
+  {
+    id: 'custom_blank',
+    badge: '✨ Escribir Mi Propia Historia...',
+    title: 'Mi Nueva Historia Viral #Shorts (60s)',
+    idea: '',
+    style: 'STICKMAN_COMEDY',
+  },
+];
+
 export default function AiMontagePage() {
   const [activeTab, setActiveTab] = useState<'STORY_60S' | 'CLASSIC_MONTAGE'>('STORY_60S');
 
@@ -246,6 +284,31 @@ export default function AiMontagePage() {
               </div>
 
               <div>
+                <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-[#FFD43B]">
+                  Ideas Rápidas (Clic para cargar o crear una nueva desde cero)
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {VIRAL_STORY_PRESETS.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => {
+                        setStoryTitle(p.title);
+                        setIdeaPrompt(p.idea);
+                        setStylePreset(p.style);
+                        if (p.idea) {
+                          handleGenerateStoryboard(p.idea, p.style, sceneCount, totalDurationSec);
+                        }
+                      }}
+                      className="rounded-xl border border-zinc-700 bg-[#0E1015] px-2.5 py-1.5 text-[11px] font-semibold text-zinc-200 transition hover:border-[#FFD43B] hover:text-[#FFD43B]"
+                    >
+                      {p.badge}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
                 <label className="mb-1 block text-xs font-bold text-zinc-300">
                   Título del Short / Video de 60s
                 </label>
@@ -258,14 +321,24 @@ export default function AiMontagePage() {
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-bold text-zinc-300">
-                  Idea de la Historia (El director IA creará las 6 escenas y diálogos)
+                <label className="mb-1 flex items-center justify-between text-xs font-bold text-zinc-300">
+                  <span>Escribe CUALQUIER Historia o Idea</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIdeaPrompt('');
+                      setStoryTitle('Mi Nueva Historia #Shorts (60s)');
+                    }}
+                    className="text-[11px] font-semibold text-[#FFD43B] hover:underline"
+                  >
+                    Limpiar cuadro
+                  </button>
                 </label>
                 <textarea
                   rows={3}
                   value={ideaPrompt}
                   onChange={(e) => setIdeaPrompt(e.target.value)}
-                  placeholder="Ej: Un stickman intenta abrir una puerta de todas las formas posibles excepto empujando..."
+                  placeholder="Escribe aquí cualquier historia que quieras crear (ej. 'Un stickman intenta cocinar un pastel pero todo le sale al revés', 'Un gato astronauta descubre un planeta de queso')... y luego pulsa 'Generar Guion de Escenas con IA'"
                   className="w-full rounded-xl border border-zinc-700 bg-[#0E1015] p-3 text-xs text-white focus:border-[#FFD43B] focus:outline-none"
                 />
               </div>

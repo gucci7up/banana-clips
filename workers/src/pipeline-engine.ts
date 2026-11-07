@@ -854,13 +854,13 @@ export async function generateStoryboardWithNvidiaNimAsync(params: {
         : '2D cartoon white stickman character with round white head, big expressive cartoon eyes, black stick arms and legs, thick black outlines, mint green room background with a brown wooden door';
 
   try {
-    const sysPrompt = `Eres un director experto en YouTube Shorts virales de 60 segundos estilo Stickman Comedy.
+    const sysPrompt = `Eres un director experto en YouTube Shorts virales de 60 segundos estilo Stickman Comedy y Animación.
 Devuelve ÚNICAMENTE un JSON válido con un arreglo de exactamente ${sceneCount} escenas para la idea del usuario.
 Cada elemento del arreglo debe tener:
 - "sceneNumber": número del 1 al ${sceneCount}
-- "title": título corto en español
-- "visualPrompt": descripción visual en inglés para FLUX.1-dev que SIEMPRE empiece con "${baseCharacterStyle}," seguido de la acción exacta y expresión facial de esa escena.
-- "narrationText": frase corta, divertida y expresiva en español que se narrará en esa escena (máximo 16 palabras).
+- "title": título corto y llamativo en español (ej. "Escena 1: ...")
+- "visualPrompt": descripción visual detallada en inglés para FLUX.1-dev que SIEMPRE empiece con "${baseCharacterStyle}," seguido del escenario, la acción exacta y la expresión facial de esa escena según la historia del usuario.
+- "narrationText": frase divertida, clara y expresiva en español que narrará el locutor en esa escena (de 10 a 18 palabras).
 - "cameraMotion": uno de ["ZOOM_IN", "ZOOM_OUT", "PAN_RIGHT", "PAN_LEFT", "PUNCH_SHAKE"]
 - "sfxType": uno de ["EFFORT", "KNOCK", "CLANG", "EXPLOSION", "DOOR_CREAK", "LAUGH"]`;
 
@@ -871,15 +871,15 @@ Cada elemento del arreglo debe tener:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+        model: 'nvidia/nemotron-3.5-bolt-e4b',
         messages: [
           { role: 'system', content: sysPrompt },
-          { role: 'user', content: `Idea de historia (60 segundos): ${params.ideaPrompt}` },
+          { role: 'user', content: `Crea las ${sceneCount} escenas para esta historia de ${totalDur} segundos: ${params.ideaPrompt}` },
         ],
-        max_tokens: 1400,
-        temperature: 0.6,
+        max_tokens: 2200,
+        temperature: 0.65,
       }),
-      signal: AbortSignal.timeout(22000),
+      signal: AbortSignal.timeout(25000),
     });
 
     if (res.ok) {
@@ -913,6 +913,21 @@ Cada elemento del arreglo debe tener:
 
   // Deterministic high-quality 6-scene Stickman Comedy Storyboard fallback
   const ideaClean = params.ideaPrompt.trim() || 'Intentó abrir la puerta de todas las formas menos empujando';
+
+  // Dynamic fallback for ANY custom story (not about a door)
+  if (!/puerta|door/i.test(ideaClean)) {
+    const topic = ideaClean.replace(/\s+/g, ' ').slice(0, 160);
+    const dynamicScenes: StorySceneSpec[] = [
+      { sceneNumber: 1, title: 'Escena 1: El Planteamiento', visualPrompt: `${baseCharacterStyle}, confident smug pose introducing the situation: ${topic}, 2D flat vector comedy frame`, narrationText: `Todo empezó así: ${topic}.`, cameraMotion: 'ZOOM_IN', sfxType: 'KNOCK', durationSec: perSceneDur },
+      { sceneNumber: 2, title: 'Escena 2: Primer Intento Exagerado', visualPrompt: `${baseCharacterStyle}, trying very hard with extreme effort and sweat in a funny exaggerated way, related to: ${topic}, 2D cartoon comedy`, narrationText: 'Su primer intento fue tan exagerado que nada salió como esperaba.', cameraMotion: 'PUNCH_SHAKE', sfxType: 'EFFORT', durationSec: perSceneDur },
+      { sceneNumber: 3, title: 'Escena 3: El Plan Extremo', visualPrompt: `${baseCharacterStyle}, determined angry face using a ridiculous oversized tool or gadget, related to: ${topic}, sparks and motion lines, 2D cartoon`, narrationText: 'Entonces sacó un plan extremo, convencido de que esta vez sí funcionaría.', cameraMotion: 'ZOOM_IN', sfxType: 'CLANG', durationSec: perSceneDur },
+      { sceneNumber: 4, title: 'Escena 4: Caos Total', visualPrompt: `${baseCharacterStyle}, chaotic comic explosion of action, flying objects, impact lines, related to: ${topic}, 2D stickman comedy`, narrationText: 'Pero todo se convirtió en un caos total, peor de lo que nadie imaginaba.', cameraMotion: 'PUNCH_SHAKE', sfxType: 'EXPLOSION', durationSec: perSceneDur },
+      { sceneNumber: 5, title: 'Escena 5: Agotado', visualPrompt: `${baseCharacterStyle}, lying exhausted and dizzy on the floor with spiral eyes, related to: ${topic}, 2D stickman cartoon`, narrationText: 'Terminó completamente agotado, sin lograr absolutamente nada.', cameraMotion: 'ZOOM_OUT', sfxType: 'EFFORT', durationSec: perSceneDur },
+      { sceneNumber: 6, title: 'Escena 6: El Remate', visualPrompt: `${baseCharacterStyle}, shocked face jaw dropped as the simplest obvious solution happens effortlessly, related to: ${topic}, 2D stickman comedy finale`, narrationText: 'Y al final, la solución era tan simple que nadie lo podía creer.', cameraMotion: 'PAN_RIGHT', sfxType: 'LAUGH', durationSec: perSceneDur },
+    ];
+    return dynamicScenes.slice(0, sceneCount);
+  }
+
   const defaultScenes: StorySceneSpec[] = [
     {
       sceneNumber: 1,
