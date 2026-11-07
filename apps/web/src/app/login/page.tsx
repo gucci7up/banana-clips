@@ -59,20 +59,20 @@ export default function LoginPage() {
       <div className="relative z-10 grid w-full max-w-5xl grid-cols-1 overflow-hidden rounded-3xl border border-zinc-800/80 bg-[#121318]/90 shadow-[0_25px_80px_-15px_rgba(0,0,0,0.85)] backdrop-blur-xl lg:grid-cols-12">
         {/* LEFT SHOWCASE PANEL (7 cols on desktop) */}
         <div className="relative flex flex-col justify-between border-b border-zinc-800/70 bg-gradient-to-br from-[#16181F] via-[#121318] to-[#1A160B] p-8 sm:p-10 lg:col-span-7 lg:border-b-0 lg:border-r">
-          <div>
+          <div className="flex flex-col items-center text-center">
             {/* Top Status Badge */}
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#FFD43B]/30 bg-[#FFD43B]/10 px-3.5 py-1 text-xs font-bold text-[#FFD43B]">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#FFD43B]/30 bg-[#FFD43B]/10 px-4 py-1 text-xs font-bold text-[#FFD43B]">
               <Sparkles className="h-3.5 w-3.5" />
               <span>AI VIDEO CLIPPING STUDIO • SELF-HOSTED</span>
             </div>
 
-            {/* Official Banana Clips Logo */}
-            <div className="my-7 flex items-center justify-center lg:justify-start">
-              <div className="overflow-hidden rounded-3xl border-2 border-[#FFD43B]/40 bg-white p-3 shadow-[0_12px_40px_-10px_rgba(255,212,59,0.35)] transition-transform duration-300 hover:scale-[1.02]">
+            {/* Official Banana Clips Logo — Centered */}
+            <div className="my-7 flex w-full items-center justify-center">
+              <div className="overflow-hidden rounded-3xl border-2 border-[#FFD43B]/50 bg-white p-3.5 shadow-[0_15px_50px_-10px_rgba(255,212,59,0.45)] transition-transform duration-300 hover:scale-[1.03]">
                 <img
                   src="/banana-clips-logo.jpg"
                   alt="Banana Clips Logo"
-                  className="h-36 w-auto object-contain sm:h-44"
+                  className="h-40 w-40 object-contain sm:h-48 sm:w-48"
                 />
               </div>
             </div>
@@ -83,7 +83,7 @@ export default function LoginPage() {
                 clips virales con IA
               </span>
             </h1>
-            <p className="mt-2.5 text-sm leading-relaxed text-zinc-400">
+            <p className="mt-2.5 max-w-lg text-sm leading-relaxed text-zinc-400">
               Suite privada de recorte inteligente, reencuadre vertical 9:16 automático, subtítulos animados palabra por palabra con Faster-Whisper y edición no destructiva acelerada por GPU.
             </p>
           </div>
