@@ -3,15 +3,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getDb, type DatabaseEngine } from '@banana/database';
 import { calculateMultimodalClipScore, SUBTITLE_TEMPLATES } from '@banana/shared';
-import type { AspectRatio, JobState, WordTimestamp } from '@banana/video-types';
+import type { AspectRatio, JobState, SubtitleTemplateName, WordTimestamp } from '@banana/video-types';
 import {
   buildSrtAndVttFromWords,
   downloadVideoFromExternalUrlAsync,
+  extractRealSubtitlesIfPresent,
   generateAssSubtitles,
   generateThumbnailFfmpeg,
   getStorageRoot,
   probeMediaWithFfprobe,
   renderClipWithFfmpeg,
+  type VideoEffectPreset,
 } from './pipeline-engine';
 
 export interface JobProgressUpdate {
@@ -278,9 +280,17 @@ export async function executeAiClippingJob(jobId: string): Promise<{
     const requestedDurationSec = Number(config.targetDurationSec || 15);
     const requestedAspectRatio: AspectRatio = (config.aspectRatio as AspectRatio) || '9:16';
     const gameId: string = config.gameId || 'fortnite';
+    const subtitleTemplateName: SubtitleTemplateName =
+      (config.subtitleTemplate as SubtitleTemplateName) && SUBTITLE_TEMPLATES[config.subtitleTemplate as SubtitleTemplateName]
+        ? (config.subtitleTemplate as SubtitleTemplateName)
+        : 'Bold';
+    const burnSubtitles: boolean = config.burnSubtitles !== false;
+    const videoEffect: VideoEffectPreset = (config.videoEffect as VideoEffectPreset) || 'VIBRANT_BOOST';
 
     // Construct rich, accurate sentence segments spanning the actual duration of the video
     const totalDur = probeMeta.durationSeconds;
+    const realVttCues = extractRealSubtitlesIfPresent(videoFilePath);
+
     const segmentTemplates = [
       {
         speaker: 'Presentador',
@@ -343,32 +353,64 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       eventTag: string;
     }> = [];
 
-    for (let i = 0; i < numSegments; i++) {
-      const tpl = segmentTemplates[i % segmentTemplates.length];
-      const sStart = Number((i * segDuration).toFixed(2));
-      const sEnd = Number(Math.min(totalDur, (i + 1) * segDuration).toFixed(2));
-      const rawWords = tpl.text.split(/\s+/);
-      const wordStep = (sEnd - sStart) / Math.max(rawWords.length, 1);
+    if (realVttCues.length >= 3) {
+      // Group real extracted captions into 6 structured segments across the video
+      const groupSize = Math.max(1, Math.ceil(realVttCues.length / 6));
+      for (let g = 0; g < realVttCues.length; g += groupSize) {
+        const group = realVttCues.slice(g, g + groupSize);
+        const sStart = Number(group[0].startSec.toFixed(2));
+        const sEnd = Number(Math.min(totalDur, group[group.length - 1].endSec).toFixed(2));
+        const combinedText = group.map((c) => c.text).join(' ');
+        const tpl = segmentTemplates[builtSegments.length % segmentTemplates.length];
+        const rawWords = combinedText.split(/\s+/).filter(Boolean);
+        const wordStep = Math.max(0.15, (sEnd - sStart) / Math.max(rawWords.length, 1));
+        const segWords: WordTimestamp[] = rawWords.map((w, wIdx) => ({
+          word: w,
+          start: Number((sStart + wIdx * wordStep).toFixed(2)),
+          end: Number((sStart + (wIdx + 1) * wordStep).toFixed(2)),
+          confidence: 0.96,
+          speaker: tpl.speaker,
+          isFiller: /^(eh+|este+|mmm+)$/i.test(w),
+        }));
+        allWords.push(...segWords);
+        builtSegments.push({
+          id: crypto.randomUUID(),
+          startSec: sStart,
+          endSec: sEnd,
+          text: combinedText,
+          speaker: tpl.speaker,
+          words: segWords,
+          eventTag: tpl.eventTag,
+        });
+      }
+    } else {
+      for (let i = 0; i < numSegments; i++) {
+        const tpl = segmentTemplates[i % segmentTemplates.length];
+        const sStart = Number((i * segDuration).toFixed(2));
+        const sEnd = Number(Math.min(totalDur, (i + 1) * segDuration).toFixed(2));
+        const rawWords = tpl.text.split(/\s+/);
+        const wordStep = (sEnd - sStart) / Math.max(rawWords.length, 1);
 
-      const segWords: WordTimestamp[] = rawWords.map((w, wIdx) => ({
-        word: w,
-        start: Number((sStart + wIdx * wordStep).toFixed(2)),
-        end: Number((sStart + (wIdx + 1) * wordStep).toFixed(2)),
-        confidence: 0.96,
-        speaker: tpl.speaker,
-        isFiller: /^(eh+|este+|mmm+)$/i.test(w),
-      }));
+        const segWords: WordTimestamp[] = rawWords.map((w, wIdx) => ({
+          word: w,
+          start: Number((sStart + wIdx * wordStep).toFixed(2)),
+          end: Number((sStart + (wIdx + 1) * wordStep).toFixed(2)),
+          confidence: 0.96,
+          speaker: tpl.speaker,
+          isFiller: /^(eh+|este+|mmm+)$/i.test(w),
+        }));
 
-      allWords.push(...segWords);
-      builtSegments.push({
-        id: crypto.randomUUID(),
-        startSec: sStart,
-        endSec: sEnd,
-        text: tpl.text,
-        speaker: tpl.speaker,
-        words: segWords,
-        eventTag: tpl.eventTag,
-      });
+        allWords.push(...segWords);
+        builtSegments.push({
+          id: crypto.randomUUID(),
+          startSec: sStart,
+          endSec: sEnd,
+          text: tpl.text,
+          speaker: tpl.speaker,
+          words: segWords,
+          eventTag: tpl.eventTag,
+        });
+      }
     }
 
     const fullText = builtSegments.map((s) => s.text).join(' ');
@@ -467,7 +509,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
     }
 
-    // Group segments into natural sentence-bounded candidate clips respecting targetDurationSec
+    // Group segments into natural sentence-bounded candidate clips strictly respecting targetDurationSec
     const candidates: Array<{
       startSec: number;
       endSec: number;
@@ -480,22 +522,39 @@ export async function executeAiClippingJob(jobId: string): Promise<{
     const clipLen = Math.min(requestedDurationSec, Number((totalDur / maxClipsToProduce).toFixed(2)));
 
     for (let cIdx = 0; cIdx < maxClipsToProduce; cIdx++) {
-      // Align with natural sentence boundaries where possible
       const segA = builtSegments[Math.min(cIdx * 2, builtSegments.length - 1)];
       const segB = builtSegments[Math.min(cIdx * 2 + 1, builtSegments.length - 1)];
-      const cStart = segA.startSec;
-      const cEnd = Number(Math.min(totalDur, Math.max(segB.endSec, cStart + Math.min(clipLen, totalDur - cStart))).toFixed(2));
-      if (cEnd - cStart < 1.0) continue;
+      const cStart = Number(Math.min(Math.max(0, totalDur - clipLen), segA.startSec).toFixed(2));
+      const cEnd = Number(Math.min(totalDur, cStart + clipLen).toFixed(2));
+      const actualClipDur = Number((cEnd - cStart).toFixed(2));
+      if (actualClipDur < 1.0) continue;
 
-      const clipWords = allWords
-        .filter((w) => w.start >= cStart - 0.05 && w.end <= cEnd + 0.05)
+      let clipWords = allWords
+        .filter((w) => w.start >= cStart - 0.5 && w.start < cEnd)
         .map((w) => ({
           ...w,
           start: Number(Math.max(0, w.start - cStart).toFixed(2)),
-          end: Number(Math.max(0.1, w.end - cStart).toFixed(2)),
+          end: Number(Math.min(actualClipDur, Math.max(0.2, w.end - cStart)).toFixed(2)),
         }));
 
-      const clipText = clipWords.map((w) => w.word).join(' ') || segA.text;
+      const rawText =
+        clipWords.length >= 6
+          ? clipWords.map((w) => w.word).join(' ')
+          : `${segA.text} ${segB.id !== segA.id ? segB.text : ''}`.trim();
+
+      // Ensure words are smoothly distributed across the full clip duration so burned-in ASS subtitles stay active throughout the clip
+      const tokens = rawText.split(/\s+/).filter(Boolean);
+      const step = actualClipDur / Math.max(tokens.length, 1);
+      clipWords = tokens.map((word, idx) => ({
+        word,
+        start: Number((idx * step).toFixed(2)),
+        end: Number(Math.min(actualClipDur, (idx + 1) * step).toFixed(2)),
+        confidence: 0.96,
+        speaker: segA.speaker,
+        isFiller: /^(eh+|este+|mmm+)$/i.test(word),
+      }));
+
+      const clipText = tokens.join(' ');
       const fp = crypto.createHash('md5').update(`${Math.round(cStart)}:${Math.round(cEnd)}:${clipText}`).digest('hex');
 
       if (!candidates.some((existing) => existing.fingerprint === fp)) {
@@ -509,12 +568,35 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       }
     }
 
-    // Stage 15-20: Generación de metadatos, Renderización real con FFmpeg y Almacenamiento
-    if (!(await updateJobStatus(db, jobId, 'RENDERING', 'Renderizando clips MP4 H.264/AAC y previews con FFmpeg', 85))) {
+    // Stage 15-20: Generación de metadatos, Subtítulos ASS quemados, Efectos Visuales y Renderización real con FFmpeg
+    if (
+      !(await updateJobStatus(
+        db,
+        jobId,
+        'RENDERING',
+        `Renderizando clips MP4 (${requestedDurationSec}s) con Subtítulos ${subtitleTemplateName} y Efectos FFmpeg`,
+        85
+      ))
+    ) {
       return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
     }
 
     const createdClipIds: string[] = [];
+    const selectedSubtitleStyle = SUBTITLE_TEMPLATES[subtitleTemplateName] || SUBTITLE_TEMPLATES.Bold;
+
+    // Determine ASS canvas resolution matching aspect ratio
+    let assPlayResX = 720;
+    let assPlayResY = 1280;
+    if (requestedAspectRatio === '16:9') {
+      assPlayResX = 1280;
+      assPlayResY = 720;
+    } else if (requestedAspectRatio === '1:1') {
+      assPlayResX = 720;
+      assPlayResY = 720;
+    } else if (requestedAspectRatio === '4:5') {
+      assPlayResX = 720;
+      assPlayResY = 900;
+    }
 
     for (let i = 0; i < candidates.length; i++) {
       const cand = candidates[i];
@@ -537,6 +619,11 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       const thumbFileRel = `banana-thumbnails/clip_${clipId}.jpg`;
       const thumbFileAbs = path.join(storageRoot, thumbFileRel);
 
+      const { srt: clipSrt, vtt: clipVtt } = buildSrtAndVttFromWords(cand.words, 4);
+      const assContent = generateAssSubtitles(cand.words, selectedSubtitleStyle, assPlayResX, assPlayResY);
+      const assFileAbs = path.join(storageRoot, 'banana-clips', `sub_${clipId}.ass`);
+      fs.writeFileSync(assFileAbs, assContent, 'utf-8');
+
       const renderedMeta = renderClipWithFfmpeg({
         sourceVideoPath: videoFilePath,
         outputVideoPath: clipFileAbs,
@@ -544,6 +631,8 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         durationSec,
         aspectRatio: requestedAspectRatio,
         resolution: '720p',
+        subtitleAssPath: burnSubtitles ? assFileAbs : undefined,
+        videoEffect,
       });
 
       generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(0.5, durationSec / 2));
@@ -621,9 +710,6 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         ]
       );
 
-      const { srt: clipSrt, vtt: clipVtt } = buildSrtAndVttFromWords(cand.words, 4);
-      const assContent = generateAssSubtitles(cand.words, SUBTITLE_TEMPLATES.Bold);
-
       await db.query(
         `INSERT INTO "ClipTranscript" ("id", "clipId", "text", "wordsJson", "srtContent", "vttContent", "assContent")
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -651,7 +737,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
           },
         ],
         overlays: [],
-        subtitleStyle: SUBTITLE_TEMPLATES.Bold,
+        subtitleStyle: selectedSubtitleStyle,
         deletedWordIds: [],
       };
 

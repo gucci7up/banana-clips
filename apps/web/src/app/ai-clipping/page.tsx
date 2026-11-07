@@ -36,6 +36,9 @@ export default function AiClippingPage() {
   const [customDuration, setCustomDuration] = useState<number>(45);
   const [useCustomDuration, setUseCustomDuration] = useState(false);
   const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '1:1' | '4:5'>('9:16');
+  const [burnSubtitles, setBurnSubtitles] = useState<boolean>(true);
+  const [subtitleTemplate, setSubtitleTemplate] = useState<string>('Bold');
+  const [videoEffect, setVideoEffect] = useState<string>('VIBRANT_BOOST');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState('');
   const [externalUrl, setExternalUrl] = useState('');
@@ -105,6 +108,9 @@ export default function AiClippingPage() {
           jobType: 'AI_CLIPPING',
           targetDurationSec: finalDuration,
           aspectRatio,
+          burnSubtitles,
+          subtitleTemplate,
+          videoEffect,
           syncExecution: false,
         }),
       });
@@ -318,6 +324,56 @@ export default function AiClippingPage() {
               <option value="16:9">16:9 Horizontal</option>
               <option value="1:1">1:1 Cuadrado</option>
               <option value="4:5">4:5 Feed Vertical</option>
+            </select>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-[#111318] p-3 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label htmlFor="burnSubtitlesCheck" className="text-xs font-bold text-[#FFD43B]">
+                Subtítulos Animados Quemados en el Clip (ASS)
+              </label>
+              <input
+                id="burnSubtitlesCheck"
+                type="checkbox"
+                checked={burnSubtitles}
+                onChange={(e) => setBurnSubtitles(e.target.checked)}
+                className="h-4 w-4 accent-[#FFD43B]"
+              />
+            </div>
+            {burnSubtitles && (
+              <div>
+                <label className="block text-[11px] text-[#94A3B8]">Plantilla de Estilo de Subtítulos</label>
+                <select
+                  value={subtitleTemplate}
+                  onChange={(e) => setSubtitleTemplate(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-[#1B1E25] p-2 text-xs text-[#F8FAFC]"
+                >
+                  <option value="Bold">Bold — Impacto TikTok / Shorts (Amarillo + Blanco)</option>
+                  <option value="Karaoke">Karaoke — Resaltado por palabra con caja oscura</option>
+                  <option value="Neon">Neon — Cian brillante + borde púrpura</option>
+                  <option value="Gaming">Gaming — Estilo Streamer de alto contraste</option>
+                  <option value="Dynamic">Dynamic — Pop celeste dinámico</option>
+                  <option value="Podcast">Podcast — Limpio y profesional</option>
+                  <option value="Classic">Classic — Estándar legible</option>
+                  <option value="Minimal">Minimal — Compacto con fondo translúcido</option>
+                  <option value="Premium">Premium — Dorado editorial</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-[#94A3B8]">Efectos Visuales de Video (FFmpeg)</label>
+            <select
+              value={videoEffect}
+              onChange={(e) => setVideoEffect(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-xs text-[#F8FAFC]"
+            >
+              <option value="VIBRANT_BOOST">Color Vibrante + Nitidez HD (Recomendado)</option>
+              <option value="DYNAMIC_ZOOM">Zoom Dinámico + Punch Visual (108%)</option>
+              <option value="CINEMATIC_CONTRAST">Contraste Cinematográfico + Fade In</option>
+              <option value="FADE_TRANSITIONS">Transición Suave de Entrada y Salida (Fade In/Out)</option>
+              <option value="NONE">Original (Sin efectos adicionales)</option>
             </select>
           </div>
 

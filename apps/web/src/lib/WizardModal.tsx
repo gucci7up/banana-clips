@@ -17,6 +17,9 @@ export function CreateClipsWizardModal() {
   const [targetDurationSec, setTargetDurationSec] = useState<number>(30);
   const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '1:1' | '4:5'>('9:16');
   const [gameId, setGameId] = useState('fortnite');
+  const [burnSubtitles, setBurnSubtitles] = useState(true);
+  const [subtitleTemplate, setSubtitleTemplate] = useState('Bold');
+  const [videoEffect, setVideoEffect] = useState('VIBRANT_BOOST');
   const [progressPhase, setProgressPhase] = useState('Iniciando...');
   const [progressPercent, setProgressPercent] = useState(0);
   const [generatedClips, setGeneratedClips] = useState<any[]>([]);
@@ -65,6 +68,9 @@ export function CreateClipsWizardModal() {
           targetDurationSec,
           aspectRatio,
           gameId,
+          burnSubtitles,
+          subtitleTemplate,
+          videoEffect,
           syncExecution: false,
         }),
       });
@@ -244,19 +250,44 @@ export function CreateClipsWizardModal() {
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-[#94A3B8]">Perfil de detector multimodal</label>
-              <select
-                value={gameId}
-                onChange={(e) => setGameId(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-sm"
-              >
-                <option value="generic">General / Podcast / Entrevistas</option>
-                <option value="fortnite">Gaming: Fortnite</option>
-                <option value="gtav">Gaming: GTA V / VI</option>
-                <option value="valorant">Gaming: Valorant</option>
-                <option value="cod">Gaming: Call of Duty</option>
-              </select>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8]">Subtítulos Quemados (ASS)</label>
+                <select
+                  value={burnSubtitles ? subtitleTemplate : 'NONE'}
+                  onChange={(e) => {
+                    if (e.target.value === 'NONE') {
+                      setBurnSubtitles(false);
+                    } else {
+                      setBurnSubtitles(true);
+                      setSubtitleTemplate(e.target.value);
+                    }
+                  }}
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-sm"
+                >
+                  <option value="Bold">Bold — Impacto TikTok / Shorts</option>
+                  <option value="Karaoke">Karaoke — Palabra activa</option>
+                  <option value="Neon">Neon — Cian + Púrpura</option>
+                  <option value="Gaming">Gaming — Streamer</option>
+                  <option value="Dynamic">Dynamic — Pop Celeste</option>
+                  <option value="Podcast">Podcast — Limpio</option>
+                  <option value="NONE">Sin subtítulos quemados</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8]">Efectos Visuales FFmpeg</label>
+                <select
+                  value={videoEffect}
+                  onChange={(e) => setVideoEffect(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-sm"
+                >
+                  <option value="VIBRANT_BOOST">Color Vibrante + Nitidez HD</option>
+                  <option value="DYNAMIC_ZOOM">Zoom Dinámico + Punch</option>
+                  <option value="CINEMATIC_CONTRAST">Contraste Cinematográfico</option>
+                  <option value="FADE_TRANSITIONS">Fade In / Fade Out</option>
+                  <option value="NONE">Sin efectos adicionales</option>
+                </select>
+              </div>
             </div>
 
             <div className="flex justify-between pt-3">

@@ -341,9 +341,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   return header + events.join('\n') + '\n';
 }
 
+export type VideoEffectPreset =
+  | 'NONE'
+  | 'VIBRANT_BOOST'
+  | 'CINEMATIC_CONTRAST'
+  | 'DYNAMIC_ZOOM'
+  | 'FADE_TRANSITIONS';
+
 /**
  * Renders a real playable MP4 (H.264 + AAC) clip using FFmpeg with Auto-Reframe (9:16, 1:1, 4:5, 16:9),
- * optional split-screen composition, speed/volume adjustments, and burned-in subtitles.
+ * burned-in ASS animated karaoke subtitles via libass, visual effects (color boost, cinematic, dynamic zoom, fades),
+ * speed/volume adjustments, and exact duration enforcement.
  */
 export function renderClipWithFfmpeg(params: {
   sourceVideoPath: string;
@@ -357,7 +365,8 @@ export function renderClipWithFfmpeg(params: {
   speed?: number;
   volume?: number;
   muted?: boolean;
-  subtitleText?: string;
+  subtitleAssPath?: string;
+  videoEffect?: VideoEffectPreset;
 }): MediaProbeResult {
   fs.mkdirSync(path.dirname(params.outputVideoPath), { recursive: true });
 
@@ -389,11 +398,42 @@ export function renderClipWithFfmpeg(params: {
   targetW = targetW - (targetW % 2);
   targetH = targetH - (targetH % 2);
 
+  const clipDur = Math.max(1.0, Math.min(180, Number(params.durationSec) || 15));
+
   // Build FFmpeg video filter chain with smooth crop / pad reframe
   const vfParts: string[] = [];
-  vfParts.push(
-    `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}`
-  );
+  if (params.videoEffect === 'DYNAMIC_ZOOM') {
+    // Subtle 108% punch-in crop + sharpness & saturation boost
+    const zoomW = Math.round(targetW * 1.08) - (Math.round(targetW * 1.08) % 2);
+    const zoomH = Math.round(targetH * 1.08) - (Math.round(targetH * 1.08) % 2);
+    vfParts.push(
+      `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},eq=saturation=1.18:contrast=1.06`
+    );
+  } else {
+    vfParts.push(
+      `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}`
+    );
+  }
+
+  // Apply Video Effects
+  if (params.videoEffect === 'VIBRANT_BOOST') {
+    vfParts.push('eq=saturation=1.28:contrast=1.08:brightness=0.02,unsharp=5:5:0.8:5:5:0.0');
+  } else if (params.videoEffect === 'CINEMATIC_CONTRAST') {
+    vfParts.push('eq=contrast=1.18:saturation=0.92:brightness=-0.02,fade=t=in:st=0:d=0.4');
+  } else if (params.videoEffect === 'FADE_TRANSITIONS') {
+    const fadeOutStart = Math.max(0.5, clipDur - 0.6).toFixed(2);
+    vfParts.push(`fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOutStart}:d=0.5`);
+  }
+
+  // Burn-in ASS animated subtitles via libass if provided
+  if (params.subtitleAssPath && fs.existsSync(params.subtitleAssPath)) {
+    // Escape path for FFmpeg filter parser (works on Linux & Windows)
+    const escapedAss = params.subtitleAssPath
+      .replace(/\\/g, '/')
+      .replace(/:/g, '\\:')
+      .replace(/'/g, "\\'");
+    vfParts.push(`ass='${escapedAss}'`);
+  }
 
   if (params.speed && params.speed !== 1 && params.speed >= 0.5 && params.speed <= 2.0) {
     vfParts.push(`setpts=${(1 / params.speed).toFixed(3)}*PTS`);
@@ -409,14 +449,15 @@ export function renderClipWithFfmpeg(params: {
     afParts.push(`atempo=${params.speed.toFixed(2)}`);
   }
 
+  // Place -ss BEFORE -i for fast seek, and -t AFTER -i so output clip duration is strictly enforced!
   const args: string[] = [
     '-y',
     '-ss',
     String(Math.max(0, params.startSec)),
-    '-t',
-    String(Math.max(0.5, params.durationSec)),
     '-i',
     params.sourceVideoPath,
+    '-t',
+    String(clipDur),
     '-vf',
     vfParts.join(','),
   ];
@@ -516,6 +557,12 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       '2',
       '--max-filesize',
       '180M',
+      '--write-auto-subs',
+      '--write-subs',
+      '--sub-langs',
+      'es.*,en.*',
+      '--sub-format',
+      'vtt',
       '-f',
       '18/22/best[height<=720][ext=mp4]/best[height<=720]/best',
       '--merge-output-format',
@@ -525,7 +572,7 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       params.url,
     ];
 
-    const dlProc = await runCommandAsync('yt-dlp', dlArgs, 35000);
+    const dlProc = await runCommandAsync('yt-dlp', dlArgs, 45000);
     if (dlProc.status === 0 && fs.existsSync(params.outputPath) && fs.statSync(params.outputPath).size > 1000) {
       return { downloadedTitle, filePath: params.outputPath };
     }
@@ -548,6 +595,71 @@ export async function downloadVideoFromExternalUrlAsync(params: {
 
   ensureFixtureVideo(params.outputPath, 30);
   return { downloadedTitle, filePath: params.outputPath };
+}
+
+/**
+ * Parses any yt-dlp downloaded .vtt subtitle file next to a video into clean timed text cues.
+ */
+export function extractRealSubtitlesIfPresent(
+  videoFilePath: string
+): Array<{ startSec: number; endSec: number; text: string }> {
+  try {
+    const dir = path.dirname(videoFilePath);
+    const base = path.basename(videoFilePath, path.extname(videoFilePath));
+    const files = fs.readdirSync(dir).filter((f) => f.startsWith(base) && f.endsWith('.vtt'));
+    if (files.length === 0) return [];
+    // Prefer Spanish VTT if available
+    const chosen = files.find((f) => f.includes('.es')) || files[0];
+    const raw = fs.readFileSync(path.join(dir, chosen), 'utf-8');
+    const lines = raw.split(/\r?\n/);
+
+    const parseTime = (t: string): number => {
+      const clean = t.trim().replace(',', '.');
+      const parts = clean.split(':').map(Number);
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      return 0;
+    };
+
+    const cues: Array<{ startSec: number; endSec: number; text: string }> = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i].trim();
+      if (line.includes('-->')) {
+        const [startStr, endPart] = line.split('-->');
+        const endStr = (endPart || '').trim().split(/\s+/)[0];
+        const startSec = parseTime(startStr);
+        const endSec = parseTime(endStr);
+        i++;
+        const textLines: string[] = [];
+        while (i < lines.length && lines[i].trim() !== '') {
+          // Strip VTT tags like <00:00:01.200><c>word</c>
+          const cleaned = lines[i]
+            .replace(/<[^>]+>/g, '')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .trim();
+          if (cleaned && !cleaned.startsWith('align:')) {
+            textLines.push(cleaned);
+          }
+          i++;
+        }
+        const combined = textLines.join(' ').replace(/\s+/g, ' ').trim();
+        if (combined && endSec - startSec >= 0.4) {
+          // Avoid duplicate rolling YouTube auto-caption lines
+          const prev = cues[cues.length - 1];
+          if (!prev || prev.text !== combined) {
+            cues.push({ startSec, endSec, text: combined });
+          }
+        }
+      } else {
+        i++;
+      }
+    }
+    return cues;
+  } catch {
+    return [];
+  }
 }
 
 /**

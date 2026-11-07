@@ -11,12 +11,13 @@ import {
   runIdempotentBootstrap,
   verifyPasswordSecure,
 } from '@banana/database';
-import { validateSafeExternalUrl } from '@banana/shared';
+import { SUBTITLE_TEMPLATES, validateSafeExternalUrl } from '@banana/shared';
 import {
   computeEmbedding384,
   cosineSimilarity,
   ensureFixtureVideo,
   executeAiClippingJob,
+  generateAssSubtitles,
   generateThumbnailFfmpeg,
   getStorageRoot,
   onJobProgress,
@@ -1093,6 +1094,9 @@ export async function createBananaApiApp(): Promise<Express> {
       targetDurationSec = 15,
       aspectRatio = '9:16',
       gameId = 'fortnite',
+      subtitleTemplate = 'Bold',
+      burnSubtitles = true,
+      videoEffect = 'VIBRANT_BOOST',
       syncExecution = false,
     } = req.body || {};
 
@@ -1111,6 +1115,9 @@ export async function createBananaApiApp(): Promise<Express> {
       targetDurationSec: Number(targetDurationSec),
       aspectRatio,
       gameId,
+      subtitleTemplate,
+      burnSubtitles: Boolean(burnSubtitles),
+      videoEffect,
     };
 
     await db.query(
@@ -1562,6 +1569,8 @@ export async function createBananaApiApp(): Promise<Express> {
       resolution = '1080p',
       aspectRatio = '9:16',
       burnSubtitles = true,
+      subtitleTemplate = 'Bold',
+      videoEffect = 'VIBRANT_BOOST',
       speed = 1.0,
       volume = 1.0,
       muted = false,
@@ -1601,6 +1610,24 @@ export async function createBananaApiApp(): Promise<Express> {
     const outKey = `export_${exportId}.mp4`;
     const outPath = path.join(storageRoot, 'banana-exports', outKey);
 
+    let subtitleAssPath: string | undefined;
+    if (burnSubtitles) {
+      const trRes = await db.query<{ assContent: string; wordsJson: any }>(
+        `SELECT "assContent", "wordsJson" FROM "ClipTranscript" WHERE "clipId" = $1 LIMIT 1`,
+        [clipId]
+      );
+      const assFileAbs = path.join(storageRoot, 'banana-exports', `sub_${exportId}.ass`);
+      if (trRes.rows[0]?.wordsJson) {
+        const words = typeof trRes.rows[0].wordsJson === 'string' ? JSON.parse(trRes.rows[0].wordsJson) : trRes.rows[0].wordsJson;
+        const tplStyle = (SUBTITLE_TEMPLATES as any)[subtitleTemplate] || SUBTITLE_TEMPLATES.Bold;
+        fs.writeFileSync(assFileAbs, generateAssSubtitles(words, tplStyle, 1080, 1920), 'utf-8');
+        subtitleAssPath = assFileAbs;
+      } else if (trRes.rows[0]?.assContent) {
+        fs.writeFileSync(assFileAbs, trRes.rows[0].assContent, 'utf-8');
+        subtitleAssPath = assFileAbs;
+      }
+    }
+
     const renderedMeta = renderClipWithFfmpeg({
       sourceVideoPath: sourcePath,
       outputVideoPath: outPath,
@@ -1611,6 +1638,8 @@ export async function createBananaApiApp(): Promise<Express> {
       speed: Number(speed),
       volume: Number(volume),
       muted: Boolean(muted),
+      subtitleAssPath,
+      videoEffect: videoEffect as any,
     });
 
     const storageObjectId = crypto.randomUUID();
