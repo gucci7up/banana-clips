@@ -1,0 +1,38 @@
+version: "3.9"
+
+# NVIDIA GPU Override for Dokploy servers (supports 4GB-8GB Low VRAM & 12GB+ High VRAM)
+services:
+  ai-service:
+    environment:
+      HARDWARE_PROFILE: ${HARDWARE_PROFILE:-NVIDIA_LOW_VRAM}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  worker-transcribe:
+    environment:
+      HARDWARE_PROFILE: ${HARDWARE_PROFILE:-NVIDIA_LOW_VRAM}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  worker-render:
+    environment:
+      HARDWARE_PROFILE: ${HARDWARE_PROFILE:-NVIDIA_LOW_VRAM}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -1,0 +1,244 @@
+version: "3.9"
+
+# =============================================================================
+# BANANA CLIPS AI STUDIO — DOCKER COMPOSE PARA COOLIFY Y DOKPLOY
+# Despliega los 9 servicios internos (frontend, api, ai-service, 4 workers,
+# postgres+pgvector, redis, minio) con volúmenes persistentes y healthchecks.
+# Compatible directamente con "Docker Compose" Build Pack en Coolify.
+# =============================================================================
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bananaclips}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bananaclips_pg_secret_password}
+      POSTGRES_DB: ${POSTGRES_DB:-bananaclips_db}
+    volumes:
+      - banana_postgres_data:/var/lib/postgresql/data
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bananaclips} -d ${POSTGRES_DB:-bananaclips_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-bananaclips_redis_secret}"]
+    volumes:
+      - banana_redis_data:/data
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-bananaclips_redis_secret}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-bananaclips_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-bananaclips_minio_secret_key}
+    volumes:
+      - banana_minio_data:/data
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.ai-service
+    restart: unless-stopped
+    environment:
+      HARDWARE_PROFILE: ${HARDWARE_PROFILE:-AUTO}
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      MODELS_CACHE_DIR: /data/models
+      STORAGE_SHARED_DIR: /data/media
+    volumes:
+      - banana_models_cache:/data/models
+      - banana_media_storage:/data/media
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bananaclips}:${POSTGRES_PASSWORD:-bananaclips_pg_secret_password}@postgres:5432/${POSTGRES_DB:-bananaclips_db}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-bananaclips_redis_secret}@redis:6379/0
+      AI_SERVICE_URL: http://ai-service:8000
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@bananaclips.local}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-ChangeMe_BananaStudio_2026!}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-replace_with_64_byte_random_hex_access_secret_key_01}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-replace_with_64_byte_random_hex_refresh_secret_key_02}
+      ENCRYPTION_KEY_HEX: ${ENCRYPTION_KEY_HEX:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      LOCAL_STORAGE_PATH: /data/media
+      SERVICE_FQDN_API_4000: ${SERVICE_FQDN_API:-}
+    volumes:
+      - banana_media_storage:/data/media
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker-ingest:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.workers
+    restart: unless-stopped
+    command: ["node", "dist/worker-entry.js", "--role=worker-ingest"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      WORKER_ROLE: worker-ingest
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bananaclips}:${POSTGRES_PASSWORD:-bananaclips_pg_secret_password}@postgres:5432/${POSTGRES_DB:-bananaclips_db}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-bananaclips_redis_secret}@redis:6379/0
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+    networks:
+      - banana-internal
+
+  worker-transcribe:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.workers
+    restart: unless-stopped
+    command: ["node", "dist/worker-entry.js", "--role=worker-transcribe"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    environment:
+      WORKER_ROLE: worker-transcribe
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bananaclips}:${POSTGRES_PASSWORD:-bananaclips_pg_secret_password}@postgres:5432/${POSTGRES_DB:-bananaclips_db}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-bananaclips_redis_secret}@redis:6379/0
+      AI_SERVICE_URL: http://ai-service:8000
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+      - banana_models_cache:/data/models
+    networks:
+      - banana-internal
+
+  worker-analyze:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.workers
+    restart: unless-stopped
+    command: ["node", "dist/worker-entry.js", "--role=worker-analyze"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    environment:
+      WORKER_ROLE: worker-analyze
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bananaclips}:${POSTGRES_PASSWORD:-bananaclips_pg_secret_password}@postgres:5432/${POSTGRES_DB:-bananaclips_db}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-bananaclips_redis_secret}@redis:6379/0
+      AI_SERVICE_URL: http://ai-service:8000
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+      - banana_models_cache:/data/models
+    networks:
+      - banana-internal
+
+  worker-render:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.workers
+    restart: unless-stopped
+    command: ["node", "dist/worker-entry.js", "--role=worker-render"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      WORKER_ROLE: worker-render
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bananaclips}:${POSTGRES_PASSWORD:-bananaclips_pg_secret_password}@postgres:5432/${POSTGRES_DB:-bananaclips_db}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-bananaclips_redis_secret}@redis:6379/0
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+    networks:
+      - banana-internal
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      INTERNAL_API_ORIGIN: http://api:4000
+      SERVICE_FQDN_FRONTEND_3000: ${SERVICE_FQDN_FRONTEND:-}
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/login"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+networks:
+  banana-internal:
+    driver: bridge
+
+volumes:
+  banana_postgres_data:
+  banana_redis_data:
+  banana_minio_data:
+  banana_models_cache:
+  banana_media_storage:

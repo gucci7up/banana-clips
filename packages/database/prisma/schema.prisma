@@ -1,0 +1,628 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+enum RoleType {
+  SUPER_ADMIN
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum JobStatus {
+  QUEUED
+  DOWNLOADING
+  PROBING
+  TRANSCODING
+  TRANSCRIBING
+  ANALYZING
+  SCORING
+  GENERATING_CLIPS
+  RENDERING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum LiveStatus {
+  IDLE
+  CONNECTING
+  RECORDING
+  PROCESSING
+  STOPPED
+  FAILED
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        RoleType @unique
+  description String
+  permissions Json     @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+}
+
+model User {
+  id                   String             @id @default(uuid()) @db.Uuid
+  username             String             @unique
+  email                String?            @unique
+  fullName             String
+  passwordHash         String
+  roleId               String             @db.Uuid
+  role                 Role               @relation(fields: [roleId], references: [id])
+  status               UserStatus         @default(ACTIVE)
+  mustChangePassword   Boolean            @default(false)
+  failedLoginAttempts  Int                @default(0)
+  lockedUntil          DateTime?
+  lastLoginAt          DateTime?
+  brandKit             Json?
+  projectPresets       Json               @default("[]")
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  sessions             Session[]
+  resourceLimit        UserResourceLimit?
+  resourceUsages       ResourceUsage[]
+  projects             Project[]
+  videos               Video[]
+  clips                Clip[]
+  editProjects         EditProject[]
+  montages             Montage[]
+  exports              Export[]
+  storageObjects       StorageObject[]
+  socialAccounts       SocialAccount[]
+  socialPosts          SocialPost[]
+  auditLogs            AuditLog[]
+
+  @@index([username])
+  @@index([roleId])
+  @@index([status])
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ipAddress        String?
+  isRevoked        Boolean   @default(false)
+  expiresAt        DateTime
+  createdAt        DateTime  @default(now())
+  revokedAt        DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model UserResourceLimit {
+  id                        String   @id @default(uuid()) @db.Uuid
+  userId                    String   @unique @db.Uuid
+  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  maxConcurrentJobs         Int      @default(2)
+  maxFileSizeMb             Int      @default(4096)
+  maxVideoDurationSeconds   Int      @default(14400)
+  maxStorageGb              Float    @default(50)
+  maxQueuedVideos           Int      @default(10)
+  processingPriority        Int      @default(5)
+  unlimitedMode             Boolean  @default(false)
+  allowedFeatures           Json     @default("[\"AI_CLIPPING\",\"GAME_CLIPPING\",\"FIND_MOMENTS\",\"LIVE_CLIPPER\",\"AI_MONTAGE\",\"VIDEO_EDITOR\",\"SOCIAL_PUBLISH\"]")
+  updatedAt                 DateTime @updatedAt
+}
+
+model ResourceUsage {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @db.Uuid
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  storageBytesUsed    BigInt   @default(0)
+  minutesProcessed    Float    @default(0)
+  videosProcessed     Int      @default(0)
+  clipsGenerated      Int      @default(0)
+  activeJobsCount     Int      @default(0)
+  recordedAt          DateTime @default(now())
+
+  @@index([userId, recordedAt])
+}
+
+model Project {
+  id            String        @id @default(uuid()) @db.Uuid
+  userId        String        @db.Uuid
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  description   String?
+  category      String        @default("GENERAL")
+  gameId        String?
+  presetName    String?
+  isFavorite    Boolean       @default(false)
+  isArchived    Boolean       @default(false)
+  deletedAt     DateTime?
+  assistantChat Json          @default("[]")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  videos        Video[]
+  clips         Clip[]
+  analysisJobs  AnalysisJob[]
+  editProjects  EditProject[]
+  montages      Montage[]
+
+  @@index([userId, createdAt])
+}
+
+model Video {
+  id               String         @id @default(uuid()) @db.Uuid
+  userId           String         @db.Uuid
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId        String?        @db.Uuid
+  project          Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  title            String
+  originalFilename String
+  storageObjectId  String?        @db.Uuid
+  storageObject    StorageObject? @relation("VideoMainStorage", fields: [storageObjectId], references: [id])
+  thumbnailPath    String?
+  previewPath      String?
+  status           String         @default("READY")
+  isFavorite       Boolean        @default(false)
+  isTrash          Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  source           VideoSource?
+  metadata         VideoMetadata?
+  transcript       Transcript?
+  speakers         Speaker[]
+  scenes           Scene[]
+  visualEvents     VisualEvent[]
+  analysisJobs     AnalysisJob[]
+  clips            Clip[]
+
+  @@index([userId, createdAt])
+  @@index([projectId])
+}
+
+model VideoSource {
+  id              String   @id @default(uuid()) @db.Uuid
+  videoId         String   @unique @db.Uuid
+  video           Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  sourceType      String   // UPLOAD | URL | LIBRARY | BATCH | LIVE_RTMP
+  originUrl       String?
+  liveStreamState LiveStatus?
+  protocol        String?
+  importedAt      DateTime @default(now())
+}
+
+model VideoMetadata {
+  id              String   @id @default(uuid()) @db.Uuid
+  videoId         String   @unique @db.Uuid
+  video           Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  durationSeconds Float
+  width           Int
+  height          Int
+  fps             Float
+  videoCodec      String
+  audioCodec      String?
+  bitrateKbps     Int
+  fileSizeBytes   BigInt
+  aspectRatio     String
+  hasAudio        Boolean  @default(true)
+  probedAt        DateTime @default(now())
+}
+
+model Transcript {
+  id           String              @id @default(uuid()) @db.Uuid
+  videoId      String              @unique @db.Uuid
+  video        Video               @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  language     String              @default("es")
+  modelUsed    String              @default("faster-whisper-small")
+  fullText     String
+  wordCount    Int                 @default(0)
+  srtContent   String?
+  vttContent   String?
+  createdAt    DateTime            @default(now())
+  segments     TranscriptSegment[]
+}
+
+model TranscriptSegment {
+  id           String                      @id @default(uuid()) @db.Uuid
+  transcriptId String                      @db.Uuid
+  transcript   Transcript                  @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  speakerId    String?                     @db.Uuid
+  speaker      Speaker?                    @relation(fields: [speakerId], references: [id])
+  startSec     Float
+  endSec       Float
+  text         String
+  wordsJson    Json                        @default("[]")
+  confidence   Float                       @default(0.95)
+  hasFiller    Boolean                     @default(false)
+  embedding    Unsupported("vector(384)")?
+  embeddingJson Json?
+
+  @@index([transcriptId, startSec])
+}
+
+model Speaker {
+  id         String              @id @default(uuid()) @db.Uuid
+  videoId    String              @db.Uuid
+  video      Video               @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  label      String              // e.g., SPEAKER_00, Presentador, Invitado
+  customName String?
+  faceBoxAvg Json?
+  segments   TranscriptSegment[]
+
+  @@index([videoId])
+}
+
+model Scene {
+  id               String                      @id @default(uuid()) @db.Uuid
+  videoId          String                      @db.Uuid
+  video            Video                       @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  startSec         Float
+  endSec           Float
+  description      String
+  motionScore      Float                       @default(0.5)
+  audioPeakScore   Float                       @default(0.5)
+  facesDetected    Int                         @default(1)
+  thumbnailPath    String?
+  visualEmbedding  Unsupported("vector(384)")?
+  embeddingJson    Json?
+
+  @@index([videoId, startSec])
+}
+
+model VisualEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  videoId     String   @db.Uuid
+  video       Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  timestampSec Float
+  durationSec Float    @default(3.0)
+  eventType   String   // LAUGH | CELEBRATION | HIGH_ACTION | AUDIO_PEAK | HUD_CHANGE | ELIMINATION_CANDIDATE | SPEAKER_SHIFT
+  gameId      String?
+  presetTag   String?
+  confidence  Float    @default(0.8)
+  description String
+  metadata    Json     @default("{}")
+
+  @@index([videoId, timestampSec])
+  @@index([eventType])
+}
+
+model AnalysisJob {
+  id               String       @id @default(uuid()) @db.Uuid
+  userId           String       @db.Uuid
+  projectId        String?      @db.Uuid
+  project          Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  videoId          String       @db.Uuid
+  video            Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  jobType          String       @default("AI_CLIPPING") // AI_CLIPPING | GAME_CLIPPING | TRANSCRIBE | RENDER_EXPORT | MONTAGE
+  status           JobStatus    @default(QUEUED)
+  currentPhase     String       @default("En cola")
+  progressPercent  Int          @default(0)
+  configJson       Json         @default("{}")
+  workerId         String?
+  errorMessage     String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  canceledAt       DateTime?
+  heartbeatAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  attempts         JobAttempt[]
+
+  @@index([userId, status])
+  @@index([videoId])
+}
+
+model JobAttempt {
+  id            String      @id @default(uuid()) @db.Uuid
+  jobId         String      @db.Uuid
+  job           AnalysisJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  attemptNumber Int
+  workerName    String
+  hardwareUsed  String      @default("CPU_ONLY")
+  status        String
+  logs          Json        @default("[]")
+  errorDetail   String?
+  startedAt     DateTime    @default(now())
+  endedAt       DateTime?
+
+  @@index([jobId])
+}
+
+model Clip {
+  id               String          @id @default(uuid()) @db.Uuid
+  userId           String          @db.Uuid
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId        String?         @db.Uuid
+  project          Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  videoId          String          @db.Uuid
+  video            Video           @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  title            String
+  altTitle         String?
+  description      String
+  hashtags         Json            @default("[]")
+  keywords         Json            @default("[]")
+  summary          String?
+  category         String          @default("HIGHLIGHT")
+  language         String          @default("es")
+  startSec         Float
+  endSec           Float
+  durationSec      Float
+  aspectRatio      String          @default("9:16")
+  reframeMode      String          @default("LEVEL_2_VISUAL_TRACKING")
+  storageObjectId  String?         @db.Uuid
+  storageObject    StorageObject?  @relation("ClipMainStorage", fields: [storageObjectId], references: [id])
+  previewPath      String?
+  thumbnailPath    String?
+  fingerprintHash  String?
+  isFavorite       Boolean         @default(false)
+  isTrash          Boolean         @default(false)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  score            ClipScore?
+  clipTranscript   ClipTranscript?
+  editProjects     EditProject[]
+  montageItems     MontageItem[]
+  exports          Export[]
+
+  @@index([userId, createdAt])
+  @@index([videoId])
+}
+
+model ClipScore {
+  id               String              @id @default(uuid()) @db.Uuid
+  clipId           String              @unique @db.Uuid
+  clip             Clip                @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  scoreTotal       Int
+  scoreHook        Int
+  scoreStory       Int
+  scoreEmotion     Int
+  scoreEngagement  Int
+  scoreClarity     Int
+  scoreVisual      Int
+  scoreShareability Int
+  explanation      String
+  algorithmVersion String              @default("v1.2.0-heuristic-multimodal")
+  weightsUsed      Json
+  createdAt        DateTime            @default(now())
+  breakdown        ClipScoreBreakdown?
+
+  @@index([scoreTotal])
+}
+
+model ClipScoreBreakdown {
+  id                  String    @id @default(uuid()) @db.Uuid
+  clipScoreId         String    @unique @db.Uuid
+  clipScore           ClipScore @relation(fields: [clipScoreId], references: [id], onDelete: Cascade)
+  openingStrengthNote String
+  narrativeContextNote String
+  emotionalPeakNote   String
+  pacingWps           Float
+  visualChangesCount  Int
+  audioClarityDb      Float
+}
+
+model ClipTranscript {
+  id         String @id @default(uuid()) @db.Uuid
+  clipId     String @unique @db.Uuid
+  clip       Clip   @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  text       String
+  wordsJson  Json   @default("[]")
+  srtContent String
+  vttContent String
+  assContent String?
+}
+
+model EditProject {
+  id              String          @id @default(uuid()) @db.Uuid
+  userId          String          @db.Uuid
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId       String?         @db.Uuid
+  project         Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  clipId          String          @db.Uuid
+  clip            Clip            @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  name            String
+  version         Int             @default(1)
+  stateJson       Json            // NonDestructiveEditState
+  historyStack    Json            @default("[]")
+  redoStack       Json            @default("[]")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  operations      EditOperation[]
+
+  @@index([userId, clipId])
+}
+
+model EditOperation {
+  id            String      @id @default(uuid()) @db.Uuid
+  editProjectId String      @db.Uuid
+  editProject   EditProject @relation(fields: [editProjectId], references: [id], onDelete: Cascade)
+  operationType String      // CUT | SPLIT | DELETE_WORD | REMOVE_SILENCE | ADD_OVERLAY | REFRAME | SUBTITLE_STYLE | SPEED | VOLUME
+  payloadJson   Json
+  createdAt     DateTime    @default(now())
+
+  @@index([editProjectId, createdAt])
+}
+
+model Montage {
+  id              String        @id @default(uuid()) @db.Uuid
+  userId          String        @db.Uuid
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId       String?       @db.Uuid
+  project         Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  name            String
+  templateName    String        @default("Gaming Compilation")
+  titleOverlay    String?
+  subtitleStyle   Json?
+  aspectRatio     String        @default("9:16")
+  status          String        @default("DRAFT")
+  outputStorageId String?       @db.Uuid
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  items           MontageItem[]
+
+  @@index([userId])
+}
+
+model MontageItem {
+  id             String  @id @default(uuid()) @db.Uuid
+  montageId      String  @db.Uuid
+  montage        Montage @relation(fields: [montageId], references: [id], onDelete: Cascade)
+  clipId         String  @db.Uuid
+  clip           Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  orderIndex     Int
+  trimStartSec   Float   @default(0)
+  trimEndSec     Float?
+  transitionType String  @default("fade")
+
+  @@index([montageId, orderIndex])
+}
+
+model Export {
+  id              String         @id @default(uuid()) @db.Uuid
+  userId          String         @db.Uuid
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clipId          String?        @db.Uuid
+  clip            Clip?          @relation(fields: [clipId], references: [id], onDelete: SetNull)
+  montageId       String?        @db.Uuid
+  preset          String         @default("TikTok")
+  resolution      String         @default("1080p")
+  aspectRatio     String         @default("9:16")
+  videoCodec      String         @default("h264")
+  audioCodec      String         @default("aac")
+  burnSubtitles   Boolean        @default(true)
+  status          String         @default("COMPLETED")
+  storageObjectId String?        @db.Uuid
+  storageObject   StorageObject? @relation(fields: [storageObjectId], references: [id])
+  shareToken      String?        @unique
+  shareExpiresAt  DateTime?
+  createdAt       DateTime       @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model StorageObject {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @db.Uuid
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bucket       String
+  objectKey    String
+  localPath    String?
+  mimeType     String
+  sizeBytes    BigInt
+  checksumSha256 String?
+  createdAt    DateTime @default(now())
+
+  videos       Video[]  @relation("VideoMainStorage")
+  clips        Clip[]   @relation("ClipMainStorage")
+  exports      Export[]
+
+  @@unique([bucket, objectKey])
+  @@index([userId])
+}
+
+model SocialAccount {
+  id                  String       @id @default(uuid()) @db.Uuid
+  userId              String       @db.Uuid
+  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform            String       // TikTok | YouTube | Instagram | Facebook
+  accountHandle       String
+  encryptedToken      String
+  encryptedRefresh    String?
+  scopes              String       @default("")
+  status              String       @default("CONNECTED")
+  tokenExpiresAt      DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  posts               SocialPost[]
+
+  @@index([userId, platform])
+}
+
+model SocialPost {
+  id              String         @id @default(uuid()) @db.Uuid
+  userId          String         @db.Uuid
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccountId String?        @db.Uuid
+  socialAccount   SocialAccount? @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  clipId          String?        @db.Uuid
+  platform        String
+  title           String
+  caption         String
+  hashtags        Json           @default("[]")
+  status          String         @default("DRAFT") // DRAFT | SCHEDULED | PUBLISHED | MANUAL_EXPORT_READY | FAILED
+  scheduledAt     DateTime?
+  publishedAt     DateTime?
+  retryCount      Int            @default(0)
+  lastError       String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([userId, status])
+}
+
+model Template {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  category    String   // SUBTITLE | MONTAGE | REFRAME | EXPORT_PRESET
+  configJson  Json
+  isSystem    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ProcessingWorker {
+  id              String   @id @default(uuid()) @db.Uuid
+  workerName      String   @unique
+  queueName       String   // worker-ingest | worker-transcribe | worker-analyze | worker-render
+  status          String   @default("ONLINE")
+  hardwareProfile String   @default("CPU_ONLY")
+  gpuName         String?
+  vramTotalMb     Int?
+  vramUsedMb      Int?
+  cpuLoadPercent  Float    @default(0)
+  ramUsedMb       Int      @default(0)
+  activeJobId     String?
+  processedCount  Int      @default(0)
+  lastHeartbeatAt DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String?  @db.Uuid
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  resource   String
+  resourceId String?
+  ipAddress  String?
+  userAgent  String?
+  details    Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action])
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  valueJson   Json
+  description String
+  updatedAt   DateTime @updatedAt
+}

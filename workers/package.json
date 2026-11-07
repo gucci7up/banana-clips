@@ -1,0 +1,24 @@
+{
+  "name": "@banana/workers",
+  "version": "1.0.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/worker-entry.ts"
+  },
+  "dependencies": {
+    "@banana/config": "*",
+    "@banana/database": "*",
+    "@banana/shared": "*",
+    "@banana/video-types": "*",
+    "bullmq": "^5.28.2",
+    "ioredis": "^5.4.1",
+    "minio": "^8.0.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

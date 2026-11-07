@@ -1,0 +1,23 @@
+version: "3.9"
+
+# CPU-Only Override for Dokploy servers without NVIDIA GPU
+services:
+  ai-service:
+    environment:
+      HARDWARE_PROFILE: CPU_ONLY
+      WHISPER_MODEL_SIZE: base
+      WHISPER_COMPUTE_TYPE: int8
+      UNLOAD_MODELS_AFTER_JOB: "true"
+
+  worker-transcribe:
+    environment:
+      HARDWARE_PROFILE: CPU_ONLY
+      MAX_CONCURRENT_TRANSCRIBE_JOBS: "1"
+
+  worker-analyze:
+    environment:
+      HARDWARE_PROFILE: CPU_ONLY
+
+  worker-render:
+    environment:
+      HARDWARE_PROFILE: CPU_ONLY

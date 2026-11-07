@@ -1,0 +1,245 @@
+version: "3.9"
+
+# =============================================================================
+# BANANA CLIPS AI STUDIO — DOKPLOY MASTER DOCKER COMPOSE
+# Deploys all 9 required internal services inside Dokploy with Traefik routing,
+# private internal networks, persistent volumes, and healthchecks.
+# =============================================================================
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bananaclips}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bananaclips_pg_secret_password}
+      POSTGRES_DB: ${POSTGRES_DB:-bananaclips_db}
+    volumes:
+      - banana_postgres_data:/var/lib/postgresql/data
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bananaclips} -d ${POSTGRES_DB:-bananaclips_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-bananaclips_redis_secret}"]
+    volumes:
+      - banana_redis_data:/data
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-bananaclips_redis_secret}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-bananaclips_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-bananaclips_minio_secret_key}
+    volumes:
+      - banana_minio_data:/data
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.ai-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MODELS_CACHE_DIR: /data/models
+      STORAGE_SHARED_DIR: /data/media
+    volumes:
+      - banana_models_cache:/data/models
+      - banana_media_storage:/data/media
+    networks:
+      - banana-internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+    networks:
+      - banana-internal
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.banana-api.rule=Host(`api.clips.tudominio.local`)"
+      - "traefik.http.routers.banana-api.entrypoints=websecure"
+      - "traefik.http.routers.banana-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.banana-api.loadbalancer.server.port=4000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker-ingest:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.workers
+    restart: unless-stopped
+    command: ["node", "dist/worker-entry.js", "--role=worker-ingest"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      WORKER_ROLE: worker-ingest
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+    networks:
+      - banana-internal
+
+  worker-transcribe:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.workers
+    restart: unless-stopped
+    command: ["node", "dist/worker-entry.js", "--role=worker-transcribe"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      WORKER_ROLE: worker-transcribe
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+      - banana_models_cache:/data/models
+    networks:
+      - banana-internal
+
+  worker-analyze:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.workers
+    restart: unless-stopped
+    command: ["node", "dist/worker-entry.js", "--role=worker-analyze"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      WORKER_ROLE: worker-analyze
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+      - banana_models_cache:/data/models
+    networks:
+      - banana-internal
+
+  worker-render:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.workers
+    restart: unless-stopped
+    command: ["node", "dist/worker-entry.js", "--role=worker-render"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      WORKER_ROLE: worker-render
+      LOCAL_STORAGE_PATH: /data/media
+    volumes:
+      - banana_media_storage:/data/media
+    networks:
+      - banana-internal
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file:
+      - .env
+    networks:
+      - banana-internal
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.banana-web.rule=Host(`clips.tudominio.local`)"
+      - "traefik.http.routers.banana-web.entrypoints=websecure"
+      - "traefik.http.routers.banana-web.tls.certresolver=letsencrypt"
+      - "traefik.http.services.banana-web.loadbalancer.server.port=3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+networks:
+  banana-internal:
+    driver: bridge
+    internal: false
+  dokploy-network:
+    external: true
+
+volumes:
+  banana_postgres_data:
+  banana_redis_data:
+  banana_minio_data:
+  banana_models_cache:
+  banana_media_storage:
