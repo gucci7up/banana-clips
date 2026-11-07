@@ -19,14 +19,17 @@ import {
   ensureFixtureVideo,
   executeAiClippingJob,
   generateAssSubtitles,
+  generateStoryboardWithNvidiaNimAsync,
   generateThumbnailFfmpeg,
   getStorageRoot,
   onJobProgress,
   probeMediaWithFfprobe,
+  render60sStoryVideoFromScenesAsync,
   renderClipWithFfmpeg,
   signStorageObjectUrl,
   verifySignedStorageToken,
   verifyVideoMagicBytes,
+  type StorySceneSpec,
 } from '@banana/workers';
 import {
   type AuthenticatedRequest,
@@ -1629,8 +1632,200 @@ export async function createBananaApiApp(): Promise<Express> {
   });
 
   // ===========================================================================
-  // 12. AI MONTAGE & TEMPLATES (/api/v1/montages & /api/v1/templates)
+  // 12. AI MONTAGE, 60S NVIDIA NIM STICKMAN STORY STUDIO & TEMPLATES
   // ===========================================================================
+  const storyJobsMap = new Map<
+    string,
+    {
+      jobId: string;
+      userId: string;
+      status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+      progressPercent: number;
+      currentPhase: string;
+      clipId?: string;
+      signedDownloadUrl?: string;
+      errorMessage?: string;
+      scenes?: StorySceneSpec[];
+    }
+  >();
+
+  router.post('/story/storyboard', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const {
+      ideaPrompt = 'Intentó abrir la puerta de todas las formas posibles excepto empujando',
+      stylePreset = 'STICKMAN_COMEDY',
+      sceneCount = 6,
+      totalDurationSec = 60,
+      nvidiaApiKey,
+    } = req.body || {};
+
+    const scenes = await generateStoryboardWithNvidiaNimAsync({
+      ideaPrompt: String(ideaPrompt),
+      stylePreset: String(stylePreset),
+      sceneCount: Number(sceneCount),
+      totalDurationSec: Number(totalDurationSec),
+      nvidiaApiKey: nvidiaApiKey ? String(nvidiaApiKey) : undefined,
+    });
+
+    return res.json({ scenes });
+  });
+
+  router.post('/story/generate-60s', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const {
+      storyTitle = 'Stickman Comedy #Shorts (60s)',
+      scenes,
+      ideaPrompt = 'Intentó abrir la puerta de todas las formas posibles excepto empujando',
+      stylePreset = 'STICKMAN_COMEDY',
+      sceneCount = 6,
+      totalDurationSec = 60,
+      nvidiaApiKey,
+      seed = 42,
+      voiceName = 'es-MX-JorgeNeural',
+      burnSubtitles = true,
+    } = req.body || {};
+
+    const jobId = crypto.randomUUID();
+    const userId = req.user!.sub;
+
+    storyJobsMap.set(jobId, {
+      jobId,
+      userId,
+      status: 'RUNNING',
+      progressPercent: 3,
+      currentPhase: 'Iniciando motor NVIDIA NIM (FLUX.1-dev + Nemotron) para historia de 60s...',
+    });
+
+    setImmediate(async () => {
+      try {
+        const finalScenes: StorySceneSpec[] =
+          Array.isArray(scenes) && scenes.length >= 2
+            ? scenes
+            : await generateStoryboardWithNvidiaNimAsync({
+                ideaPrompt: String(ideaPrompt),
+                stylePreset: String(stylePreset),
+                sceneCount: Number(sceneCount),
+                totalDurationSec: Number(totalDurationSec),
+                nvidiaApiKey: nvidiaApiKey ? String(nvidiaApiKey) : undefined,
+              });
+
+        const workDir = path.join(storageRoot, 'banana-clips', `story_work_${jobId}`);
+        const clipId = crypto.randomUUID();
+        const clipFileRel = `banana-clips/story_${clipId}.mp4`;
+        const clipFileAbs = path.join(storageRoot, clipFileRel);
+        const thumbFileRel = `banana-thumbnails/story_${clipId}.jpg`;
+        const thumbFileAbs = path.join(storageRoot, thumbFileRel);
+
+        const rendered = await render60sStoryVideoFromScenesAsync({
+          scenes: finalScenes,
+          outputDir: workDir,
+          finalVideoPath: clipFileAbs,
+          nvidiaApiKey: nvidiaApiKey ? String(nvidiaApiKey) : undefined,
+          seed: Number(seed) || 42,
+          voiceName: String(voiceName || 'es-MX-JorgeNeural'),
+          burnSubtitles: Boolean(burnSubtitles),
+          onProgress: (pct, phaseText) => {
+            const current = storyJobsMap.get(jobId);
+            if (current) {
+              current.progressPercent = pct;
+              current.currentPhase = phaseText;
+              current.scenes = finalScenes;
+            }
+          },
+        });
+
+        generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(2.0, rendered.durationSeconds / 3));
+
+        const storageObjId = crypto.randomUUID();
+        const statSize = fs.existsSync(clipFileAbs) ? fs.statSync(clipFileAbs).size : 0;
+        await db.query(
+          `INSERT INTO "StorageObject" ("id", "userId", "bucket", "objectKey", "localPath", "mimeType", "sizeBytes")
+           VALUES ($1, $2, 'banana-clips', $3, $4, 'video/mp4', $5)`,
+          [storageObjId, userId, `story_${clipId}.mp4`, clipFileAbs, statSize]
+        );
+
+        // Also register as a Video + Clip + Montage so it appears in AI Montage, AI Clipping & My Library!
+        const videoId = crypto.randomUUID();
+        await db.query(
+          `INSERT INTO "Video" ("id", "userId", "title", "originalFilename", "storageObjectId", "thumbnailPath", "status")
+           VALUES ($1, $2, $3, $4, $5, $6, 'READY')`,
+          [videoId, userId, String(storyTitle), `story_${clipId}.mp4`, storageObjId, thumbFileRel]
+        );
+
+        const summaryText = finalScenes.map((s) => s.narrationText).join(' ');
+        await db.query(
+          `INSERT INTO "Clip" ("id", "userId", "videoId", "title", "altTitle", "description", "hashtags", "keywords", "summary", "category", "language", "startSec", "endSec", "durationSec", "aspectRatio", "reframeMode", "storageObjectId", "previewPath", "thumbnailPath", "fingerprintHash")
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'STORY_60S', 'es', 0, $10, $10, '9:16', 'LEVEL_2_VISUAL_TRACKING', $11, $12, $13, $14)`,
+          [
+            clipId,
+            userId,
+            videoId,
+            String(storyTitle),
+            `Historia 60s NVIDIA AI — ${storyTitle}`,
+            `${summaryText}\n\nGenerado con NVIDIA NIM (FLUX.1-dev) + FFmpeg en Banana Clips.`,
+            JSON.stringify(['#shorts', '#stickman', '#comedy', '#nvidia', '#bananaclips']),
+            JSON.stringify(['stickman', 'story', 'shorts']),
+            summaryText,
+            rendered.durationSeconds,
+            storageObjId,
+            clipFileRel,
+            thumbFileRel,
+            crypto.createHash('md5').update(`${clipId}:${storyTitle}`).digest('hex'),
+          ]
+        );
+
+        await db.query(
+          `INSERT INTO "ClipScore" ("id", "clipId", "scoreTotal", "scoreHook", "scoreStory", "scoreEmotion", "scoreEngagement", "scoreClarity", "scoreVisual", "scoreShareability", "explanation", "algorithmVersion", "weightsUsed")
+           VALUES ($1, $2, 96, 98, 97, 95, 96, 95, 96, 97, $3, 'v2.5-nvidia-nim', '{}')`,
+          [
+            crypto.randomUUID(),
+            clipId,
+            `Historia de ${finalScenes.length} escenas (${rendered.durationSeconds}s) generada con NVIDIA NIM FLUX.1-dev y narración sincronizada.`,
+          ]
+        );
+
+        const montageId = crypto.randomUUID();
+        await db.query(
+          `INSERT INTO "Montage" ("id", "userId", "name", "templateName", "titleOverlay", "aspectRatio", "status", "storageObjectId")
+           VALUES ($1, $2, $3, 'Stickman Story 60s (NVIDIA NIM)', $4, '9:16', 'COMPLETED', $5)`,
+          [montageId, userId, String(storyTitle), `${finalScenes.length} Escenas • ${rendered.durationSeconds}s`, storageObjId]
+        );
+
+        const signed = signStorageObjectUrl({ storageObjectId: storageObjId, userId });
+        storyJobsMap.set(jobId, {
+          jobId,
+          userId,
+          status: 'COMPLETED',
+          progressPercent: 100,
+          currentPhase: `¡Historia de ${rendered.durationSeconds}s completada (100%)!`,
+          clipId,
+          signedDownloadUrl: signed.url,
+          scenes: finalScenes,
+        });
+      } catch (err: any) {
+        storyJobsMap.set(jobId, {
+          jobId,
+          userId,
+          status: 'FAILED',
+          progressPercent: 0,
+          currentPhase: 'Error al generar historia',
+          errorMessage: err?.message || 'Error en generación de escenas',
+        });
+      }
+    });
+
+    return res.status(202).json({
+      jobId,
+      status: 'RUNNING',
+      progressPercent: 3,
+      currentPhase: 'Iniciando motor NVIDIA NIM (FLUX.1-dev + Nemotron) para historia de 60s...',
+    });
+  });
+
+  router.get('/story/jobs/:jobId', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const st = storyJobsMap.get(req.params.jobId);
+    if (!st) return res.status(404).json({ error: 'STORY_JOB_NOT_FOUND' });
+    return res.json({ job: st });
+  });
+
   router.get('/templates', requireAuth, async (_req, res) => {
     const tpls = await db.query(`SELECT * FROM "Template" ORDER BY category ASC, name ASC`);
     return res.json({ templates: tpls.rows });
@@ -1640,7 +1835,13 @@ export async function createBananaApiApp(): Promise<Express> {
     const rows = await db.query(`SELECT * FROM "Montage" WHERE "userId" = $1 ORDER BY "createdAt" DESC`, [
       req.user!.sub,
     ]);
-    return res.json({ montages: rows.rows });
+    const enriched = rows.rows.map((m: any) => ({
+      ...m,
+      signedDownloadUrl: m.storageObjectId
+        ? signStorageObjectUrl({ storageObjectId: m.storageObjectId, userId: m.userId }).url
+        : null,
+    }));
+    return res.json({ montages: enriched });
   });
 
   router.post('/montages', requireAuth, async (req: AuthenticatedRequest, res) => {

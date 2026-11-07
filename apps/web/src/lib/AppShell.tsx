@@ -37,7 +37,7 @@ const MAIN_NAV = [
   { href: '/game-clipping', labelEs: 'Game Clipping', labelEn: 'Game Clipping', icon: Gamepad2 },
   { href: '/find-moments', labelEs: 'Find Moments', labelEn: 'Find Moments', icon: Search },
   { href: '/live-clipper', labelEs: 'Live Clipper', labelEn: 'Live Clipper', icon: Radio },
-  { href: '/ai-montage', labelEs: 'AI Montage', labelEn: 'AI Montage', icon: Layers },
+  { href: '/ai-montage', labelEs: 'AI Story 60s & Montage', labelEn: 'AI Story 60s & Montage', icon: Layers },
   { href: '/editor', labelEs: 'Editor de Video', labelEn: 'Video Editor', icon: Film },
   { href: '/library', labelEs: 'Mi Biblioteca', labelEn: 'My Library', icon: FolderKanban },
   { href: '/social', labelEs: 'Publicaciones', labelEn: 'Social Publishing', icon: Share2 },

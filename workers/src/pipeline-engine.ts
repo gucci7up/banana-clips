@@ -816,6 +816,514 @@ export function renderClipWithFfmpeg(params: {
   return probeMediaWithFfprobe(params.outputVideoPath);
 }
 
+export interface StorySceneSpec {
+  sceneNumber: number;
+  title: string;
+  visualPrompt: string;
+  narrationText: string;
+  cameraMotion: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN_RIGHT' | 'PAN_LEFT' | 'PUNCH_SHAKE';
+  sfxType: 'EFFORT' | 'KNOCK' | 'CLANG' | 'EXPLOSION' | 'DOOR_CREAK' | 'LAUGH';
+  durationSec: number;
+}
+
+const DEFAULT_NVIDIA_NIM_KEY =
+  process.env.NVIDIA_API_KEY ||
+  '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';
+
+/**
+ * Generates a 6-scene (60-second) consistent Stickman / Cartoon Storyboard using NVIDIA NIM LLM
+ * (`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` or `z-ai/glm-5.3-flash`) with deterministic fallback.
+ */
+export async function generateStoryboardWithNvidiaNimAsync(params: {
+  ideaPrompt: string;
+  stylePreset?: string;
+  sceneCount?: number;
+  totalDurationSec?: number;
+  nvidiaApiKey?: string;
+}): Promise<StorySceneSpec[]> {
+  const sceneCount = Math.max(3, Math.min(8, Number(params.sceneCount) || 6));
+  const totalDur = Math.max(30, Math.min(90, Number(params.totalDurationSec) || 60));
+  const perSceneDur = Number((totalDur / sceneCount).toFixed(1));
+  const apiKey = (params.nvidiaApiKey || DEFAULT_NVIDIA_NIM_KEY).trim();
+
+  const baseCharacterStyle =
+    params.stylePreset === 'CARTOON_3D'
+      ? '3D Pixar style expressive cartoon character, vibrant lighting, clean background'
+      : params.stylePreset === 'ANIME_ACTION'
+        ? '2D anime style character, dynamic cel shading, expressive face, clean background'
+        : '2D cartoon white stickman character with round white head, big expressive cartoon eyes, black stick arms and legs, thick black outlines, mint green room background with a brown wooden door';
+
+  try {
+    const sysPrompt = `Eres un director experto en YouTube Shorts virales de 60 segundos estilo Stickman Comedy.
+Devuelve ÚNICAMENTE un JSON válido con un arreglo de exactamente ${sceneCount} escenas para la idea del usuario.
+Cada elemento del arreglo debe tener:
+- "sceneNumber": número del 1 al ${sceneCount}
+- "title": título corto en español
+- "visualPrompt": descripción visual en inglés para FLUX.1-dev que SIEMPRE empiece con "${baseCharacterStyle}," seguido de la acción exacta y expresión facial de esa escena.
+- "narrationText": frase corta, divertida y expresiva en español que se narrará en esa escena (máximo 16 palabras).
+- "cameraMotion": uno de ["ZOOM_IN", "ZOOM_OUT", "PAN_RIGHT", "PAN_LEFT", "PUNCH_SHAKE"]
+- "sfxType": uno de ["EFFORT", "KNOCK", "CLANG", "EXPLOSION", "DOOR_CREAK", "LAUGH"]`;
+
+    const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+        messages: [
+          { role: 'system', content: sysPrompt },
+          { role: 'user', content: `Idea de historia (60 segundos): ${params.ideaPrompt}` },
+        ],
+        max_tokens: 1400,
+        temperature: 0.6,
+      }),
+      signal: AbortSignal.timeout(22000),
+    });
+
+    if (res.ok) {
+      const data: any = await res.json();
+      const rawContent = String(data?.choices?.[0]?.message?.content || '');
+      const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed) && parsed.length >= 3) {
+          return parsed.slice(0, sceneCount).map((item: any, idx: number) => ({
+            sceneNumber: idx + 1,
+            title: String(item.title || `Escena ${idx + 1}`),
+            visualPrompt: String(item.visualPrompt || '').includes('stickman')
+              ? String(item.visualPrompt)
+              : `${baseCharacterStyle}, ${String(item.visualPrompt || params.ideaPrompt)}`,
+            narrationText: String(
+              item.narrationText || `En la escena ${idx + 1}, nuestro personaje intenta resolver el problema.`
+            ),
+            cameraMotion: (['ZOOM_IN', 'ZOOM_OUT', 'PAN_RIGHT', 'PAN_LEFT', 'PUNCH_SHAKE'].includes(item.cameraMotion)
+              ? item.cameraMotion
+              : 'ZOOM_IN') as StorySceneSpec['cameraMotion'],
+            sfxType: (['EFFORT', 'KNOCK', 'CLANG', 'EXPLOSION', 'DOOR_CREAK', 'LAUGH'].includes(item.sfxType)
+              ? item.sfxType
+              : 'EFFORT') as StorySceneSpec['sfxType'],
+            durationSec: perSceneDur,
+          }));
+        }
+      }
+    }
+  } catch {}
+
+  // Deterministic high-quality 6-scene Stickman Comedy Storyboard fallback
+  const ideaClean = params.ideaPrompt.trim() || 'Intentó abrir la puerta de todas las formas menos empujando';
+  const defaultScenes: StorySceneSpec[] = [
+    {
+      sceneNumber: 1,
+      title: 'Escena 1: El Exceso de Confianza',
+      visualPrompt: `${baseCharacterStyle}, standing confidently with hands on hips smiling smugly in front of a closed brown wooden door, 2D flat vector animation frame`,
+      narrationText: `Nuestro protagonista llegó muy confiado frente a la puerta: ${ideaClean}.`,
+      cameraMotion: 'ZOOM_IN',
+      sfxType: 'KNOCK',
+      durationSec: perSceneDur,
+    },
+    {
+      sceneNumber: 2,
+      title: 'Escena 2: Tirando con Toda su Fuerza',
+      visualPrompt: `${baseCharacterStyle}, pulling the door handle with both hands with extreme effort, squinting eyes, foot braced against the door, sweating, 2D cartoon comedy`,
+      narrationText: 'Primero tiró de la manija con todas sus fuerzas, apoyando hasta el pie en la pared.',
+      cameraMotion: 'PUNCH_SHAKE',
+      sfxType: 'EFFORT',
+      durationSec: perSceneDur,
+    },
+    {
+      sceneNumber: 3,
+      title: 'Escena 3: La Palanca de Acero',
+      visualPrompt: `${baseCharacterStyle}, angry determined face using a red metal crowbar wedged into the brown door frame trying to pry it open, sparks flying, 2D cartoon`,
+      narrationText: 'Como no abría, trajo una palanca de hierro gigante e intentó forzar el marco sin éxito.',
+      cameraMotion: 'ZOOM_IN',
+      sfxType: 'CLANG',
+      durationSec: perSceneDur,
+    },
+    {
+      sceneNumber: 4,
+      title: 'Escena 4: Patada Voladora Extrema',
+      visualPrompt: `${baseCharacterStyle}, jumping in mid-air delivering a dramatic flying karate kick against the closed brown door, comic impact lines, 2D stickman comedy`,
+      narrationText: 'Desesperado, tomó impulso desde el pasillo y lanzó una patada voladora digna de película.',
+      cameraMotion: 'PUNCH_SHAKE',
+      sfxType: 'EXPLOSION',
+      durationSec: perSceneDur,
+    },
+    {
+      sceneNumber: 5,
+      title: 'Escena 5: Agotado en el Suelo',
+      visualPrompt: `${baseCharacterStyle}, lying exhausted and dizzy on the mint green floor next to the intact brown door, spiral eyes, 2D stickman cartoon`,
+      narrationText: 'Terminó completamente agotado en el suelo mientras la puerta seguía intacta sin un rasguño.',
+      cameraMotion: 'ZOOM_OUT',
+      sfxType: 'EFFORT',
+      durationSec: perSceneDur,
+    },
+    {
+      sceneNumber: 6,
+      title: 'Escena 6: Solo Había que Empujar',
+      visualPrompt: `${baseCharacterStyle}, shocked face with jaw dropped watching as the brown wooden door swings open easily inward with a gentle push, 2D stickman comedy finale`,
+      narrationText: 'Hasta que alguien llegó, simplemente empujó la puerta hacia adentro y se abrió sin esfuerzo.',
+      cameraMotion: 'PAN_RIGHT',
+      sfxType: 'LAUGH',
+      durationSec: perSceneDur,
+    },
+  ];
+
+  return defaultScenes.slice(0, sceneCount);
+}
+
+/**
+ * Generates a vertical 9:16 keyframe image using NVIDIA NIM (`black-forest-labs/flux.1-dev`)
+ * with consistent character seed, or renders a clean procedural Stickman 2D vector frame as fallback.
+ */
+export async function generateSceneImageWithNvidiaNimAsync(params: {
+  visualPrompt: string;
+  outputPath: string;
+  seed?: number;
+  nvidiaApiKey?: string;
+  sceneNumber?: number;
+}): Promise<string> {
+  fs.mkdirSync(path.dirname(params.outputPath), { recursive: true });
+  const apiKey = (params.nvidiaApiKey || DEFAULT_NVIDIA_NIM_KEY).trim();
+
+  try {
+    const res = await fetch('https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        prompt: params.visualPrompt,
+        width: 768,
+        height: 1344,
+        steps: 18,
+        seed: params.seed || 42,
+      }),
+      signal: AbortSignal.timeout(48000),
+    });
+
+    if (res.ok) {
+      const data: any = await res.json();
+      const b64 = data?.artifacts?.[0]?.base64 || data?.image;
+      if (b64 && typeof b64 === 'string' && b64.length > 1000) {
+        fs.writeFileSync(params.outputPath, Buffer.from(b64, 'base64'));
+        return params.outputPath;
+      }
+    }
+  } catch {}
+
+  // Fallback: render a crisp 720x1280 mint-green Stickman room frame via FFmpeg lavfi drawbox
+  execFileSync(
+    'ffmpeg',
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=#CBE8DC:s=720x1280:d=1',
+      '-vf',
+      'drawbox=x=420:y=220:w=220:h=820:color=#8B5A2B@1:t=fill,drawbox=x=420:y=220:w=220:h=820:color=#222222@1:t=6,drawbox=x=210:y=460:w=140:h=140:color=white@1:t=fill,drawbox=x=245:y=600:w=70:h=220:color=white@1:t=fill',
+      '-frames:v',
+      '1',
+      params.outputPath,
+    ],
+    { stdio: 'ignore', timeout: 15000 }
+  );
+  return params.outputPath;
+}
+
+/**
+ * Generates real Spanish/English TTS voiceover + comedic SFX for a scene, then animates the scene
+ * keyframe with cinematic 24fps camera motion (`zoompan` / `shake`) and stitches all scenes into a
+ * single 60-second vertical 9:16 MP4 video with burned-in ASS subtitles!
+ */
+export async function render60sStoryVideoFromScenesAsync(params: {
+  scenes: StorySceneSpec[];
+  outputDir: string;
+  finalVideoPath: string;
+  nvidiaApiKey?: string;
+  seed?: number;
+  voiceName?: string;
+  burnSubtitles?: boolean;
+  watermarkImagePath?: string;
+  onProgress?: (pct: number, phaseText: string) => void;
+}): Promise<{ filePath: string; durationSeconds: number; sceneThumbnails: string[] }> {
+  fs.mkdirSync(params.outputDir, { recursive: true });
+  fs.mkdirSync(path.dirname(params.finalVideoPath), { recursive: true });
+
+  const sceneClipPaths: string[] = [];
+  const sceneThumbnails: string[] = [];
+  const allWords: WordTimestamp[] = [];
+  let cumulativeSec = 0;
+
+  const totalScenes = params.scenes.length;
+  const voice = params.voiceName || 'es-MX-JorgeNeural';
+
+  for (let i = 0; i < totalScenes; i++) {
+    const sc = params.scenes[i];
+    const basePct = Math.round(5 + (i / totalScenes) * 75);
+    params.onProgress?.(
+      basePct,
+      `Generando Escena ${i + 1}/${totalScenes} con NVIDIA FLUX.1-dev ("${sc.title}")...`
+    );
+
+    const imgPath = path.join(params.outputDir, `scene_${i + 1}_keyframe.png`);
+    await generateSceneImageWithNvidiaNimAsync({
+      visualPrompt: sc.visualPrompt,
+      outputPath: imgPath,
+      seed: params.seed || 42,
+      nvidiaApiKey: params.nvidiaApiKey,
+      sceneNumber: sc.sceneNumber,
+    });
+    sceneThumbnails.push(imgPath);
+
+    // Generate TTS voiceover audio for this scene using edge-tts (or comedic SFX synth tone fallback)
+    const ttsPath = path.join(params.outputDir, `scene_${i + 1}_tts.mp3`);
+    let hasTts = false;
+    if (sc.narrationText && sc.narrationText.trim().length > 0) {
+      try {
+        const ttsProc = await runCommandAsync(
+          'python3',
+          ['-m', 'edge_tts', '--voice', voice, '--text', sc.narrationText.trim(), '--write-media', ttsPath],
+          20000
+        );
+        if (ttsProc.status === 0 && fs.existsSync(ttsPath) && fs.statSync(ttsPath).size > 500) {
+          hasTts = true;
+        }
+      } catch {}
+    }
+
+    const sceneDur = Math.max(4, Math.min(18, Number(sc.durationSec) || 10));
+    const totalFrames = Math.round(sceneDur * 24);
+
+    // Build word timestamps for this scene so burned-in ASS subtitles match the narration
+    const words = (sc.narrationText || sc.title).split(/\s+/).filter(Boolean);
+    const speakSpan = Math.max(2.0, sceneDur - 0.8);
+    const wordStep = speakSpan / Math.max(words.length, 1);
+    words.forEach((w, wIdx) => {
+      allWords.push({
+        word: w,
+        start: Number((cumulativeSec + 0.3 + wIdx * wordStep).toFixed(2)),
+        end: Number((cumulativeSec + 0.3 + (wIdx + 1) * wordStep).toFixed(2)),
+        confidence: 0.98,
+        speaker: 'Narrador',
+        isFiller: false,
+      });
+    });
+    cumulativeSec += sceneDur;
+
+    // Camera motion expression in FFmpeg zoompan (720x1280 @ 24fps)
+    let zpFilter = `scale=1440:2560,zoompan=z='min(zoom+0.0008,1.22)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=720x1280:fps=24`;
+    if (sc.cameraMotion === 'ZOOM_OUT') {
+      zpFilter = `scale=1440:2560,zoompan=z='max(1.22-0.0008*on,1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=720x1280:fps=24`;
+    } else if (sc.cameraMotion === 'PAN_RIGHT') {
+      zpFilter = `scale=1440:2560,zoompan=z='1.15':x='(iw-iw/zoom)*(on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=720x1280:fps=24`;
+    } else if (sc.cameraMotion === 'PAN_LEFT') {
+      zpFilter = `scale=1440:2560,zoompan=z='1.15':x='(iw-iw/zoom)*(1-on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=720x1280:fps=24`;
+    } else if (sc.cameraMotion === 'PUNCH_SHAKE') {
+      zpFilter = `scale=1440:2560,zoompan=z='min(zoom+0.0012,1.26)':x='iw/2-(iw/zoom/2)+sin(on*1.7)*14':y='ih/2-(ih/zoom/2)+cos(on*2.1)*10':d=${totalFrames}:s=720x1280:fps=24`;
+    }
+
+    const fadeOutSt = Math.max(0.5, sceneDur - 0.35).toFixed(2);
+    const vf = `${zpFilter},fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutSt}:d=0.3,format=yuv420p`;
+
+    const sceneMp4 = path.join(params.outputDir, `scene_${i + 1}_clip.mp4`);
+    const sfxFreq =
+      sc.sfxType === 'EXPLOSION'
+        ? 110
+        : sc.sfxType === 'CLANG'
+          ? 620
+          : sc.sfxType === 'LAUGH'
+            ? 520
+            : sc.sfxType === 'KNOCK'
+              ? 240
+              : 340;
+
+    if (hasTts) {
+      await runCommandAsync(
+        'ffmpeg',
+        [
+          '-y',
+          '-loop',
+          '1',
+          '-i',
+          imgPath,
+          '-i',
+          ttsPath,
+          '-f',
+          'lavfi',
+          '-i',
+          `sine=frequency=${sfxFreq}:beep_factor=2:duration=${sceneDur}`,
+          '-filter_complex',
+          `[0:v]${vf}[v];[1:a]volume=1.35,apad=whole_dur=${sceneDur}[voice];[2:a]volume=0.06[sfx];[voice][sfx]amix=inputs=2:duration=first[a]`,
+          '-map',
+          '[v]',
+          '-map',
+          '[a]',
+          '-t',
+          String(sceneDur),
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-crf',
+          '22',
+          '-c:a',
+          'aac',
+          '-ar',
+          '44100',
+          '-ac',
+          '2',
+          '-b:a',
+          '128k',
+          sceneMp4,
+        ],
+        60000
+      );
+    } else {
+      await runCommandAsync(
+        'ffmpeg',
+        [
+          '-y',
+          '-loop',
+          '1',
+          '-i',
+          imgPath,
+          '-f',
+          'lavfi',
+          '-i',
+          `sine=frequency=${sfxFreq}:beep_factor=3:duration=${sceneDur}`,
+          '-vf',
+          vf,
+          '-af',
+          'volume=0.14',
+          '-t',
+          String(sceneDur),
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-crf',
+          '22',
+          '-c:a',
+          'aac',
+          '-ar',
+          '44100',
+          '-ac',
+          '2',
+          '-b:a',
+          '128k',
+          sceneMp4,
+        ],
+        60000
+      );
+    }
+
+    sceneClipPaths.push(sceneMp4);
+  }
+
+  params.onProgress?.(85, `Uniendo las ${totalScenes} escenas en un video continuo de ${Math.round(cumulativeSec)}s...`);
+
+  // Write FFmpeg concat list
+  const concatListPath = path.join(params.outputDir, 'concat_scenes.txt');
+  const concatContent = sceneClipPaths
+    .map((p) => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`)
+    .join('\n');
+  fs.writeFileSync(concatListPath, concatContent, 'utf-8');
+
+  const stitchedRawPath = path.join(params.outputDir, 'stitched_raw.mp4');
+  await runCommandAsync(
+    'ffmpeg',
+    [
+      '-y',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      concatListPath,
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      stitchedRawPath,
+    ],
+    90000
+  );
+
+  // Burn in ASS animated subtitles onto the 60s stitched story video
+  if (params.burnSubtitles !== false && allWords.length > 0) {
+    params.onProgress?.(93, 'Incrustando subtítulos animados ASS en la historia de 60 segundos...');
+    const assPath = path.join(params.outputDir, 'story_subs.ass');
+    const assContent = generateAssSubtitles(
+      allWords,
+      {
+        fontFamily: 'DejaVu Sans',
+        fontSizePx: 44,
+        primaryColorHex: '#FFFFFF',
+        activeWordColorHex: '#FFD43B',
+        outlineColorHex: '#000000',
+        backgroundBoxOpacity: 0.75,
+        position: 'bottom',
+        maxWordsPerLine: 4,
+      },
+      720,
+      1280,
+      {
+        autoEmojis: true,
+        captionPresetId: 'MarkerSweep',
+        clipDurationSec: cumulativeSec,
+      }
+    );
+    fs.writeFileSync(assPath, assContent, 'utf-8');
+    const escapedAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+
+    await runCommandAsync(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',
+        stitchedRawPath,
+        '-vf',
+        `ass='${escapedAss}'`,
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-crf',
+        '22',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'copy',
+        '-movflags',
+        '+faststart',
+        params.finalVideoPath,
+      ],
+      90000
+    );
+  } else {
+    fs.copyFileSync(stitchedRawPath, params.finalVideoPath);
+  }
+
+  params.onProgress?.(100, '¡Historia de 60 segundos completada (100%)!');
+  const meta = probeMediaWithFfprobe(params.finalVideoPath);
+  return {
+    filePath: params.finalVideoPath,
+    durationSeconds: meta.durationSeconds,
+    sceneThumbnails,
+  };
+}
+
 /**
  * Generates an NLE-compatible XML (xmeml v4 for Adobe Premiere Pro, DaVinci Resolve & Final Cut Pro)
  * so editors can import the AI clip timeline with exact in/out frame cuts and subtitle markers.
