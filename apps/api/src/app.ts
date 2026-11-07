@@ -1784,7 +1784,7 @@ export async function createBananaApiApp(): Promise<Express> {
 
         const montageId = crypto.randomUUID();
         await db.query(
-          `INSERT INTO "Montage" ("id", "userId", "name", "templateName", "titleOverlay", "aspectRatio", "status", "storageObjectId")
+          `INSERT INTO "Montage" ("id", "userId", "name", "templateName", "titleOverlay", "aspectRatio", "status", "outputStorageId")
            VALUES ($1, $2, $3, 'Stickman Story 60s (NVIDIA NIM)', $4, '9:16', 'COMPLETED', $5)`,
           [montageId, userId, String(storyTitle), `${finalScenes.length} Escenas • ${rendered.durationSeconds}s`, storageObjId]
         );
@@ -1837,8 +1837,8 @@ export async function createBananaApiApp(): Promise<Express> {
     ]);
     const enriched = rows.rows.map((m: any) => ({
       ...m,
-      signedDownloadUrl: m.storageObjectId
-        ? signStorageObjectUrl({ storageObjectId: m.storageObjectId, userId: m.userId }).url
+      signedDownloadUrl: m.outputStorageId
+        ? signStorageObjectUrl({ storageObjectId: m.outputStorageId, userId: m.userId }).url
         : null,
     }));
     return res.json({ montages: enriched });
