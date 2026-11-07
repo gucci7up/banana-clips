@@ -13,6 +13,7 @@ import {
   getStorageRoot,
   probeMediaWithFfprobe,
   renderClipWithFfmpeg,
+  translateTextToTargetLang,
   type VideoEffectPreset,
 } from './pipeline-engine';
 
@@ -286,15 +287,31 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         : 'Bold';
     const burnSubtitles: boolean = config.burnSubtitles !== false;
     const videoEffect: VideoEffectPreset = (config.videoEffect as VideoEffectPreset) || 'AI_BROLL_CUTAWAY';
+    const captionPresetId: string = config.captionPresetId || 'WordCut';
     const autoEmojis: boolean = config.autoEmojis !== false;
     const hookBanner: boolean = config.hookBanner !== false;
+    const hookStyle: 'Classic' | 'Statement' | 'Editorial' = config.hookStyle || 'Classic';
+    const motionGraphics: boolean = Boolean(config.motionGraphics);
     const brandWatermarkText: string =
       config.brandWatermarkText !== undefined ? String(config.brandWatermarkText) : '@BananaClips';
     const ctaOutro: boolean = config.ctaOutro !== false;
     const ctaOutroText: string =
       config.ctaOutroText !== undefined ? String(config.ctaOutroText) : 'SÍGUENOS Y COMPARTE PARA MÁS';
+    const autoBroll: boolean = config.autoBroll !== undefined ? Boolean(config.autoBroll) : true;
+    const speechCleanup: boolean = Boolean(config.speechCleanup);
     const audioEnhancer: boolean = config.audioEnhancer !== false;
-    const trimSilences: boolean = Boolean(config.trimSilences);
+    const autoSfx: boolean = Boolean(config.autoSfx);
+    const autoZoom: boolean = Boolean(config.autoZoom);
+    const autoTransitions: boolean = Boolean(config.autoTransitions);
+    const autoColorCorrection: boolean = config.autoColorCorrection !== false;
+    const trimSilences: boolean = speechCleanup || Boolean(config.trimSilences);
+    const captionTranslation: boolean = Boolean(config.captionTranslation);
+    const targetLanguage: string = config.targetLanguage || 'English';
+    const voiceDubbing: boolean = Boolean(config.voiceDubbing);
+    const dubbingLanguage: string = config.dubbingLanguage || 'English';
+    const rangeStartSec: number = Math.max(0, Number(config.rangeStartSec || 0));
+    const rangeEndSec: number = Number(config.rangeEndSec || 0);
+    const momentsPrompt: string = String(config.momentsPrompt || '').trim();
 
     // Construct rich, accurate sentence segments spanning the actual duration of the video
     const totalDur = probeMeta.durationSeconds;
@@ -564,16 +581,30 @@ export async function executeAiClippingJob(jobId: string): Promise<{
     }> = [];
 
     const maxClipsToProduce = 3;
+    const effectiveEnd = rangeEndSec > rangeStartSec + 3 ? Math.min(totalDur, rangeEndSec) : totalDur;
+    const effectiveSpan = Math.max(4, effectiveEnd - rangeStartSec);
     const clipLen =
-      totalDur >= requestedDurationSec * 2
+      effectiveSpan >= requestedDurationSec * 2
         ? requestedDurationSec
-        : Number(Math.max(4, totalDur / maxClipsToProduce).toFixed(2));
+        : Number(Math.max(4, effectiveSpan / maxClipsToProduce).toFixed(2));
+
+    // If user provided a 'Moments to include' prompt, sort builtSegments by semantic similarity first
+    const orderedSegments = [...builtSegments];
+    if (momentsPrompt) {
+      const promptVec = computeEmbedding384(momentsPrompt);
+      orderedSegments.sort(
+        (a, b) =>
+          cosineSimilarity(promptVec, computeEmbedding384(b.text)) -
+          cosineSimilarity(promptVec, computeEmbedding384(a.text))
+      );
+    }
 
     for (let cIdx = 0; cIdx < maxClipsToProduce; cIdx++) {
-      const segA = builtSegments[Math.min(cIdx * 2, builtSegments.length - 1)];
-      const segB = builtSegments[Math.min(cIdx * 2 + 1, builtSegments.length - 1)];
-      const cStart = Number(Math.min(Math.max(0, totalDur - clipLen), segA.startSec).toFixed(2));
-      const cEnd = Number(Math.min(totalDur, cStart + clipLen).toFixed(2));
+      const segA = orderedSegments[Math.min(cIdx * 2, orderedSegments.length - 1)];
+      const segB = orderedSegments[Math.min(cIdx * 2 + 1, orderedSegments.length - 1)];
+      const rawStart = Math.max(rangeStartSec, segA.startSec);
+      const cStart = Number(Math.min(Math.max(rangeStartSec, effectiveEnd - clipLen), rawStart).toFixed(2));
+      const cEnd = Number(Math.min(effectiveEnd, cStart + clipLen).toFixed(2));
       const actualClipDur = Number((cEnd - cStart).toFixed(2));
       if (actualClipDur < 1.0) continue;
 
@@ -585,10 +616,18 @@ export async function executeAiClippingJob(jobId: string): Promise<{
           end: Number(Math.min(actualClipDur, Math.max(0.2, w.end - cStart)).toFixed(2)),
         }));
 
-      const rawText =
+      let rawText =
         clipWords.length >= 6
           ? clipWords.map((w) => w.word).join(' ')
           : `${segA.text} ${segB.id !== segA.id ? segB.text : ''}`.trim();
+
+      if (speechCleanup) {
+        rawText = rawText.replace(/\b(eh+|este+|mmm+|uh+|um+|\[resoplido\])\b/gi, '').replace(/\s+/g, ' ').trim();
+      }
+      if (captionTranslation || voiceDubbing) {
+        const langToUse = captionTranslation ? targetLanguage : dubbingLanguage;
+        rawText = translateTextToTargetLang(rawText, langToUse);
+      }
 
       // Ensure words are smoothly distributed across the full clip duration so burned-in ASS subtitles stay active throughout the clip
       const tokens = rawText.split(/\s+/).filter(Boolean);
@@ -674,6 +713,9 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       const assContent = generateAssSubtitles(cand.words, selectedSubtitleStyle, assPlayResX, assPlayResY, {
         autoEmojis,
         hookBannerText: hookBanner ? cleanHeadline : undefined,
+        hookStyle,
+        motionGraphics,
+        captionPresetId,
         brandWatermarkText: brandWatermarkText.trim() || undefined,
         ctaOutroText: ctaOutro ? ctaOutroText : undefined,
         clipDurationSec: durationSec,
@@ -692,6 +734,11 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         videoEffect,
         audioEnhancer,
         trimSilences,
+        autoBroll,
+        autoZoom,
+        autoTransitions,
+        autoColorCorrection,
+        autoSfx,
       });
 
       // Capture viral thumbnail at 1.2s so the burned-in Hook Banner + Subtitles appear on the cover

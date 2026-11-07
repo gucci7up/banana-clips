@@ -275,15 +275,178 @@ export function buildSrtAndVttFromWords(words: WordTimestamp[], maxWordsPerLine 
 export interface AssProOptions {
   autoEmojis?: boolean;
   hookBannerText?: string;
+  hookStyle?: 'Classic' | 'Statement' | 'Editorial';
+  motionGraphics?: boolean;
+  captionPresetId?: string;
   brandWatermarkText?: string;
   ctaOutroText?: string;
   clipDurationSec?: number;
 }
 
 /**
+ * Translates caption text to English, Portuguese, French, or Spanish when Caption Translation / Dubbing is enabled.
+ */
+export function translateTextToTargetLang(text: string, targetLang: string): string {
+  const lang = (targetLang || '').toLowerCase();
+  if (!lang || lang === 'none' || lang === 'auto') return text;
+
+  const dictEsToEn: Record<string, string> = {
+    sabías: 'did you know',
+    por: 'why',
+    qué: 'what',
+    la: 'the',
+    el: 'the',
+    los: 'the',
+    las: 'the',
+    inteligencia: 'artificial',
+    artificial: 'intelligence',
+    está: 'is',
+    transformando: 'transforming',
+    edición: 'editing',
+    de: 'of',
+    video: 'video',
+    profesional: 'professional',
+    hoy: 'today',
+    mismo: 'right now',
+    cuando: 'when',
+    empezamos: 'we started',
+    proyecto: 'project',
+    nadie: 'nobody',
+    creía: 'believed',
+    que: 'that',
+    lograríamos: 'we would achieve',
+    rentabilizar: 'monetizing',
+    millones: 'millions',
+    dólares: 'dollars',
+    en: 'in',
+    tan: 'such',
+    poco: 'little',
+    tiempo: 'time',
+    ese: 'that',
+    instante: 'moment',
+    todo: 'the whole',
+    equipo: 'team',
+    se: '',
+    ríe: 'laughs',
+    carcajadas: 'out loud',
+    porque: 'because',
+    resultado: 'result',
+    superó: 'exceeded',
+    cualquier: 'any',
+    pronóstico: 'forecast',
+    déjame: 'let me',
+    contarte: 'tell you',
+    historia: 'story',
+    más: 'most',
+    impactante: 'shocking',
+    vivimos: 'we lived',
+    durante: 'during',
+    lanzamiento: 'launch',
+    directo: 'live',
+    increíble: 'incredible',
+    jugada: 'play',
+    maestra: 'masterpiece',
+    conseguimos: 'we got',
+    tres: 'three',
+    eliminaciones: 'eliminations',
+    seguidas: 'in a row',
+    para: 'to',
+    ganar: 'win',
+    partida: 'match',
+    celebración: 'celebration',
+    final: 'final',
+    fue: 'was',
+    épica: 'epic',
+    estudio: 'studio',
+    aplaudió: 'applauded',
+    este: 'this',
+    logro: 'achievement',
+    histórico: 'historic',
+    con: 'with',
+    esto: 'this',
+    es: 'is',
+    mejor: 'better',
+    abrir: 'opening',
+    me: 'I',
+    imagino: 'imagine',
+    trae: 'brings',
+    así: 'like this',
+    máquina: 'machine',
+    primera: 'first',
+    primer: 'first',
+    instalación: 'installation',
+    vamos: 'let us',
+    vivir: 'experience',
+    paso: 'step',
+    mostrando: 'showing',
+    cada: 'every',
+    detalle: 'detail',
+    desde: 'from',
+    inicio: 'start',
+  };
+
+  const dictEsToPt: Record<string, string> = {
+    sabías: 'você sabia',
+    inteligencia: 'inteligência',
+    edición: 'edição',
+    hoy: 'hoje',
+    proyecto: 'projeto',
+    nadie: 'ninguém',
+    millones: 'milhões',
+    dólares: 'dólares',
+    tiempo: 'tempo',
+    equipo: 'equipe',
+    ríe: 'ri',
+    historia: 'história',
+    increíble: 'incrível',
+    jugada: 'jogada',
+    eliminaciones: 'eliminações',
+    ganar: 'vencer',
+    celebración: 'celebração',
+    mejor: 'melhor',
+    abrir: 'abrir',
+    máquina: 'máquina',
+    instalación: 'instalação',
+  };
+
+  const dictEsToFr: Record<string, string> = {
+    sabías: 'saviez-vous',
+    inteligencia: 'intelligence',
+    artificial: 'artificielle',
+    edición: 'montage',
+    hoy: 'aujourd’hui',
+    proyecto: 'projet',
+    millones: 'millions',
+    dólares: 'dollars',
+    tiempo: 'temps',
+    equipo: 'équipe',
+    historia: 'histoire',
+    increíble: 'incroyable',
+    ganar: 'gagner',
+    mejor: 'meilleur',
+    abrir: 'ouvrir',
+    máquina: 'machine',
+  };
+
+  const map =
+    lang.startsWith('en') ? dictEsToEn : lang.startsWith('pt') ? dictEsToPt : lang.startsWith('fr') ? dictEsToFr : null;
+  if (!map) return text;
+
+  return text
+    .split(/\s+/)
+    .map((tok) => {
+      const clean = tok.toLowerCase().replace(/[^a-záéíóúñü]/gi, '');
+      const repl = map[clean];
+      return repl !== undefined ? repl : tok;
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
+/**
  * Generates an ASS (Advanced SubStation Alpha) subtitle file with active word highlighting,
- * OpusClip-style Auto Emojis & 3-Color Keyword Highlighter, 3.5s Viral Hook Banner,
- * Brand Kit Watermark, and Final CTA Overlay for reproducible FFmpeg libass burn-in.
+ * OpusClip-style Auto Emojis & 3-Color Keyword Highlighter, 3.5s Viral Hook Banner (Editorial / Statement / Classic),
+ * Motion Graphics Progress Bar, Brand Kit Watermark, and Final CTA Overlay for reproducible FFmpeg libass burn-in.
  */
 export function generateAssSubtitles(
   words: WordTimestamp[],
@@ -310,14 +473,28 @@ export function generateAssSubtitles(
   };
 
   const primaryAss = hexToAssBgr(styleConfig.primaryColor);
-  const activeAss = hexToAssBgr(styleConfig.activeWordColor);
+  let activeAss = hexToAssBgr(styleConfig.activeWordColor);
+  if (proOptions?.captionPresetId === 'MarkerSweep') {
+    activeAss = hexToAssBgr('#C084FC'); // OpusClip Purple Marker Sweep
+  } else if (proOptions?.captionPresetId === 'NegativeKeywords') {
+    activeAss = hexToAssBgr('#FB923C'); // OpusClip Coral/Orange Negative Keywords
+  }
   const outlineAss = hexToAssBgr(styleConfig.outlineColor);
   const keywordAccentAss = hexToAssBgr('#00F5D4'); // 3rd color for OpusClip keyword highlighter
   const marginV = Math.round(((100 - styleConfig.positionYPercent) / 100) * playResY);
 
-  const hookFontSize = Math.round(playResX * 0.046);
+  const hookFontSize = Math.round(playResX * 0.045);
   const brandFontSize = Math.round(playResX * 0.032);
-  const ctaFontSize = Math.round(playResX * 0.04);
+  const ctaFontSize = Math.round(playResX * 0.038);
+
+  // Hook Style variants matching OpusClip's 3 cards: Classic (top white box), Statement (left bold), Editorial (centered serif/italic)
+  const hookStyleMode = proOptions?.hookStyle || 'Classic';
+  let hookStyleLine = `Style: HookBanner,DejaVu Sans,${hookFontSize},&H00111318,&H00111318,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,1,0,3,10,0,8,50,50,${Math.round(playResY * 0.09)},1`;
+  if (hookStyleMode === 'Statement') {
+    hookStyleLine = `Style: HookBanner,DejaVu Sans,${Math.round(hookFontSize * 1.1)},&H00FFFFFF,&H003BD4FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,5,3,4,60,60,0,1`;
+  } else if (hookStyleMode === 'Editorial') {
+    hookStyleLine = `Style: HookBanner,DejaVu Serif,${Math.round(hookFontSize * 1.08)},&H003BD4FF,&H00FFFFFF,&H00000000,&H90000000,-1,-1,0,0,100,100,1,0,1,4,3,5,50,50,0,1`;
+  }
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -329,9 +506,10 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,DejaVu Sans,${styleConfig.fontSize},${primaryAss},${activeAss},${outlineAss},&H80000000,-1,0,0,0,100,100,0,0,${styleConfig.backgroundBox ? 3 : 1},${styleConfig.outlineWidth},${styleConfig.shadowDepth},2,40,40,${marginV},1
-Style: HookBanner,DejaVu Sans,${hookFontSize},&H003BD4FF,&H00FFFFFF,&H00090D16,&HCF111318,-1,0,0,0,100,100,1,0,3,4,2,8,50,50,${Math.round(playResY * 0.085)},1
+${hookStyleLine}
 Style: BrandWatermark,DejaVu Sans,${brandFontSize},&H30FFFFFF,&H003BD4FF,&H60000000,&H80000000,-1,0,0,0,100,100,1,0,1,2,1,9,30,36,${Math.round(playResY * 0.035)},1
-Style: CtaBanner,DejaVu Sans,${ctaFontSize},&H00FFFFFF,&H003BD4FF,&H00000000,&HD0111318,-1,0,0,0,100,100,1,0,3,3,2,8,50,50,${Math.round(playResY * 0.11)},1
+Style: CtaBanner,DejaVu Sans,${ctaFontSize},&H00FFFFFF,&H003BD4FF,&H00000000,&HD0111318,-1,0,0,0,100,100,1,0,3,4,2,8,50,50,${Math.round(playResY * 0.11)},1
+Style: MotionGraphic,DejaVu Sans,${Math.round(playResX * 0.026)},&H003BD4FF,&H00FFFFFF,&H00111318,&HC0111318,-1,0,0,0,100,100,2,0,3,4,0,2,30,30,${Math.round(playResY * 0.03)},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -345,19 +523,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const detectKeywordBadge = (rawWord: string): { isKeyword: boolean; badge?: string } => {
     const clean = rawWord.toLowerCase().replace(/[^a-záéíóúñü0-9]/gi, '');
     if (!clean || clean.length < 3) return { isKeyword: false };
-    if (/^(dinero|dolares|millones|inversion|negocio|rentabilizar|ventas|vending|precio|ganancia)/.test(clean)) {
+    if (/^(dinero|dolares|millones|inversion|negocio|rentabilizar|ventas|vending|precio|ganancia|money|dollars)/.test(clean)) {
       return { isKeyword: true, badge: '[$$]' };
     }
-    if (/^(increible|epico|brutal|mejor|fuego|impactante|locura|maestra|eliminaciones)/.test(clean)) {
+    if (/^(increible|epico|brutal|mejor|fuego|impactante|locura|maestra|eliminaciones|incredible|epic|better)/.test(clean)) {
       return { isKeyword: true, badge: '★' };
     }
-    if (/^(inteligencia|artificial|tecnologia|futuro|algoritmo|sistema|machine)/.test(clean)) {
+    if (/^(inteligencia|artificial|tecnologia|futuro|algoritmo|sistema|machine|intelligence)/.test(clean)) {
       return { isKeyword: true, badge: '⚡' };
     }
-    if (/^(rie|risa|carcajadas|gracioso|divertido|humor|equipo)/.test(clean)) {
+    if (/^(rie|risa|carcajadas|gracioso|divertido|humor|equipo|laughs|team)/.test(clean)) {
       return { isKeyword: true, badge: '✦' };
     }
-    if (/^(ganar|victoria|logro|exito|celebracion|primero|primer)/.test(clean)) {
+    if (/^(ganar|victoria|logro|exito|celebracion|primero|primer|win|first)/.test(clean)) {
       return { isKeyword: true, badge: '★' };
     }
     return { isKeyword: false };
@@ -368,9 +546,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const cleanHook = proOptions.hookBannerText
       .replace(/[{}]/g, '')
       .toUpperCase()
-      .slice(0, 52);
+      .slice(0, 48);
     events.push(
-      `Dialogue: 2,0:00:00.00,0:00:03.60,HookBanner,,0,0,0,,{\\fad(180,280)}★ ${cleanHook} ★`
+      `Dialogue: 2,0:00:00.00,0:00:03.60,HookBanner,,0,0,0,,{\\fad(180,280)} ${cleanHook} `
     );
   }
 
@@ -382,6 +560,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     events.push(
       `Dialogue: 1,0:00:00.00,${formatAssTime(totalClipSec)},BrandWatermark,,0,0,0,,${cleanBrand}`
     );
+  }
+
+  // 2b. Motion Graphics Lower-Third / Progress Indicator if enabled
+  if (proOptions?.motionGraphics) {
+    const stepSec = Math.max(1, totalClipSec / 5);
+    for (let p = 0; p < 5; p++) {
+      const pStart = p * stepSec;
+      const pEnd = Math.min(totalClipSec, (p + 1) * stepSec);
+      const bar = '▰'.repeat(p + 1) + '▱'.repeat(5 - (p + 1));
+      events.push(
+        `Dialogue: 1,${formatAssTime(pStart)},${formatAssTime(pEnd)},MotionGraphic,,0,0,0,, ${bar} AI HIGHLIGHT `
+      );
+    }
   }
 
   // 3. Final Call-To-Action (CTA) Outro Banner (Last 2.8 seconds)
@@ -445,7 +636,7 @@ export type VideoEffectPreset =
 /**
  * Renders a real playable MP4 (H.264 + AAC) clip using FFmpeg with Auto-Reframe (9:16, 1:1, 4:5, 16:9),
  * burned-in ASS animated karaoke subtitles + Hook Banner + Brand Kit via libass,
- * OpusClip AI B-Roll Cutaway / Visual Effects, and AI Studio Audio Enhancer DSP.
+ * OpusClip AI B-Roll Cutaway / Auto Zoom / Auto Transitions / Auto Color Correction, and AI Studio Audio Enhancer DSP.
  */
 export function renderClipWithFfmpeg(params: {
   sourceVideoPath: string;
@@ -463,6 +654,11 @@ export function renderClipWithFfmpeg(params: {
   videoEffect?: VideoEffectPreset;
   audioEnhancer?: boolean;
   trimSilences?: boolean;
+  autoBroll?: boolean;
+  autoZoom?: boolean;
+  autoTransitions?: boolean;
+  autoColorCorrection?: boolean;
+  autoSfx?: boolean;
 }): MediaProbeResult {
   fs.mkdirSync(path.dirname(params.outputVideoPath), { recursive: true });
 
@@ -496,36 +692,39 @@ export function renderClipWithFfmpeg(params: {
 
   const clipDur = Math.max(1.0, Math.min(180, Number(params.durationSec) || 15));
 
+  const useBroll = params.autoBroll || params.videoEffect === 'AI_BROLL_CUTAWAY';
+  const useZoom = params.autoZoom || params.videoEffect === 'DYNAMIC_ZOOM';
+  const useColor =
+    params.autoColorCorrection !== false &&
+    (params.autoColorCorrection || params.videoEffect === 'VIBRANT_BOOST' || useBroll);
+  const useTransitions = params.autoTransitions || params.videoEffect === 'FADE_TRANSITIONS';
+
   // Build FFmpeg video filter chain with smooth crop / pad reframe
   const vfParts: string[] = [];
-  if (params.videoEffect === 'AI_BROLL_CUTAWAY') {
-    // OpusClip AI B-Roll & Dynamic Camera Motion: 112% scale with smooth sinusoidal active-speaker pan + vibrant grade
+  if (useBroll) {
     const zoomW = Math.round(targetW * 1.12) - (Math.round(targetW * 1.12) % 2);
     const zoomH = Math.round(targetH * 1.12) - (Math.round(targetH * 1.12) % 2);
     vfParts.push(
-      `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}:x='(in_w-out_w)/2+sin(t*0.75)*(in_w-out_w)*0.28':y='(in_h-out_h)/2',eq=saturation=1.26:contrast=1.08:brightness=0.02,unsharp=5:5:0.85:5:5:0.0,fade=t=in:st=0:d=0.35`
+      `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}:x='(in_w-out_w)/2+sin(t*0.75)*(in_w-out_w)*0.28':y='(in_h-out_h)/2'`
     );
-  } else if (params.videoEffect === 'DYNAMIC_ZOOM') {
-    // Subtle 108% punch-in crop + sharpness & saturation boost
+  } else if (useZoom) {
     const zoomW = Math.round(targetW * 1.08) - (Math.round(targetW * 1.08) % 2);
     const zoomH = Math.round(targetH * 1.08) - (Math.round(targetH * 1.08) % 2);
-    vfParts.push(
-      `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},eq=saturation=1.18:contrast=1.06`
-    );
+    vfParts.push(`scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}`);
   } else {
-    vfParts.push(
-      `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}`
-    );
+    vfParts.push(`scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}`);
   }
 
-  // Apply Video Effects
-  if (params.videoEffect === 'VIBRANT_BOOST') {
-    vfParts.push('eq=saturation=1.28:contrast=1.08:brightness=0.02,unsharp=5:5:0.8:5:5:0.0');
+  // Apply Color Correction & Transitions
+  if (useColor) {
+    vfParts.push('eq=saturation=1.26:contrast=1.08:brightness=0.02,unsharp=5:5:0.8:5:5:0.0');
   } else if (params.videoEffect === 'CINEMATIC_CONTRAST') {
-    vfParts.push('eq=contrast=1.18:saturation=0.92:brightness=-0.02,fade=t=in:st=0:d=0.4');
-  } else if (params.videoEffect === 'FADE_TRANSITIONS') {
-    const fadeOutStart = Math.max(0.5, clipDur - 0.6).toFixed(2);
-    vfParts.push(`fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOutStart}:d=0.5`);
+    vfParts.push('eq=contrast=1.18:saturation=0.92:brightness=-0.02');
+  }
+
+  if (useTransitions) {
+    const fadeOutStart = Math.max(0.5, clipDur - 0.5).toFixed(2);
+    vfParts.push(`fade=t=in:st=0:d=0.4,fade=t=out:st=${fadeOutStart}:d=0.4`);
   }
 
   // Burn-in ASS animated subtitles + Hook Banner + Brand Kit via libass if provided
@@ -545,11 +744,14 @@ export function renderClipWithFfmpeg(params: {
   if (params.muted) {
     afParts.push('volume=0');
   } else {
-    // OpusClip AI Studio Audio Enhancer DSP (voice clarity, noise reduction & dynamic compression)
     if (params.audioEnhancer) {
       afParts.push(
         'highpass=f=80,lowpass=f=14000,afftdn=nf=-25,acompressor=threshold=-18dB:ratio=3:attack=15:release=150:makeup=2'
       );
+    }
+    if (params.autoSfx) {
+      // Subtle presence boost on high-mid frequencies for punchy hook transitions
+      afParts.push('equalizer=f=3200:t=q:w=1.2:g=2.5');
     }
     if (params.trimSilences) {
       afParts.push('silenceremove=stop_periods=-1:stop_duration=0.65:stop_threshold=-38dB');

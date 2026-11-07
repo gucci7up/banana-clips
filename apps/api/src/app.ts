@@ -1120,6 +1120,7 @@ export async function createBananaApiApp(): Promise<Express> {
 
     const jobId = crypto.randomUUID();
     const configJson = {
+      ...req.body,
       targetDurationSec: Number(targetDurationSec),
       aspectRatio,
       gameId,
