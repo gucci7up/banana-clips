@@ -499,8 +499,8 @@ export async function downloadVideoFromExternalUrlAsync(params: {
   try {
     const titleProc = await runCommandAsync(
       'yt-dlp',
-      ['--no-playlist', '--no-warnings', '--get-title', params.url],
-      25000
+      ['--no-playlist', '--no-warnings', '--socket-timeout', '10', '--get-title', params.url],
+      15000
     );
     if (titleProc.status === 0 && titleProc.stdout.trim()) {
       downloadedTitle = titleProc.stdout.trim().split('\n')[0].trim();
@@ -510,10 +510,14 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       '--no-playlist',
       '--no-warnings',
       '--no-check-certificates',
-      '--download-sections',
-      `*0-${params.maxDurationSeconds || 300}`,
+      '--socket-timeout',
+      '12',
+      '--retries',
+      '2',
+      '--max-filesize',
+      '180M',
       '-f',
-      'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best',
+      '18/22/best[height<=720][ext=mp4]/best[height<=720]/best',
       '--merge-output-format',
       'mp4',
       '-o',
@@ -521,7 +525,7 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       params.url,
     ];
 
-    const dlProc = await runCommandAsync('yt-dlp', dlArgs, 300000);
+    const dlProc = await runCommandAsync('yt-dlp', dlArgs, 35000);
     if (dlProc.status === 0 && fs.existsSync(params.outputPath) && fs.statSync(params.outputPath).size > 1000) {
       return { downloadedTitle, filePath: params.outputPath };
     }
