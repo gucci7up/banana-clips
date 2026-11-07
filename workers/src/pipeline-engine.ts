@@ -1277,25 +1277,30 @@ export async function render60sStoryVideoFromScenesAsync(params: {
 
   // Burn in ASS animated subtitles onto the 60s stitched story video
   if (params.burnSubtitles !== false && allWords.length > 0) {
+   try {
     params.onProgress?.(93, 'Incrustando subtítulos animados ASS en la historia de 60 segundos...');
     const assPath = path.join(params.outputDir, 'story_subs.ass');
     const assContent = generateAssSubtitles(
       allWords,
       {
+        template: 'Bold',
         fontFamily: 'DejaVu Sans',
-        fontSizePx: 44,
-        primaryColorHex: '#FFFFFF',
-        activeWordColorHex: '#FFD43B',
-        outlineColorHex: '#000000',
-        backgroundBoxOpacity: 0.75,
-        position: 'bottom',
+        fontSize: 52,
+        primaryColor: '#FFFFFF',
+        activeWordColor: '#FFD43B',
+        outlineColor: '#000000',
+        outlineWidth: 4,
+        shadowDepth: 2,
+        positionYPercent: 78,
+        animation: 'karaoke-highlight',
+        backgroundBox: false,
+        backgroundColor: '#000000',
         maxWordsPerLine: 4,
       },
       720,
       1280,
       {
         autoEmojis: true,
-        captionPresetId: 'MarkerSweep',
         clipDurationSec: cumulativeSec,
       }
     );
@@ -1326,6 +1331,13 @@ export async function render60sStoryVideoFromScenesAsync(params: {
       ],
       90000
     );
+    if (!fs.existsSync(params.finalVideoPath) || fs.statSync(params.finalVideoPath).size < 1000) {
+      fs.copyFileSync(stitchedRawPath, params.finalVideoPath);
+    }
+   } catch (subErr) {
+    console.warn('[Story60s] Subtitle burn failed, delivering video without subtitles:', subErr);
+    fs.copyFileSync(stitchedRawPath, params.finalVideoPath);
+   }
   } else {
     fs.copyFileSync(stitchedRawPath, params.finalVideoPath);
   }
