@@ -29,7 +29,7 @@ RUN npm install --no-audit --no-fund && \
 RUN npm --prefix apps/web run build
 
 COPY infrastructure/docker/start-unified.sh /app/start-unified.sh
-RUN chmod +x /app/start-unified.sh
+RUN sed -i 's/\r$//' /app/start-unified.sh && chmod +x /app/start-unified.sh
 
 VOLUME ["/data/media", "/data/models", "/data/pgdata"]
 EXPOSE 3000 4000 8000
