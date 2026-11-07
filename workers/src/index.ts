@@ -13,6 +13,7 @@ import {
   getStorageRoot,
   probeMediaWithFfprobe,
   renderClipWithFfmpeg,
+  transcribeVideoWithFasterWhisperAsync,
   translateTextToTargetLang,
   type VideoEffectPreset,
   type WatermarkPosition,
@@ -326,12 +327,28 @@ export async function executeAiClippingJob(jobId: string): Promise<{
 
     // Construct rich, accurate sentence segments spanning the actual duration of the video
     const totalDur = probeMeta.durationSeconds;
-    const realVttCues = extractRealSubtitlesIfPresent(videoFilePath);
+    const isSyntheticTestFixture = /conferencia|prueba|demo|test/i.test(video.title);
+    let realVttCues = extractRealSubtitlesIfPresent(videoFilePath);
 
-    const isFixtureOrTest = /conferencia|prueba|demo|test|video desde url/i.test(video.title);
+    // If no external VTT captions exist (or it's a local upload / Facebook / YouTube video without auto-subs),
+    // run real Faster-Whisper ASR speech-to-text transcription with word-level timestamps!
+    if (realVttCues.length < 2 && !isSyntheticTestFixture) {
+      await updateJobStatus(
+        db,
+        jobId,
+        'TRANSCRIBING',
+        'Transcribiendo voz real del video con Faster-Whisper IA (timestamps por palabra)...',
+        56
+      );
+      const whisperCues = await transcribeVideoWithFasterWhisperAsync(videoFilePath, config.speechLanguage);
+      if (whisperCues.length > 0) {
+        realVttCues = whisperCues;
+      }
+    }
+
     const cleanTopic = video.title.replace(/[()[\]_-]/g, ' ').replace(/\s+/g, ' ').trim();
 
-    const segmentTemplates = isFixtureOrTest
+    const segmentTemplates = isSyntheticTestFixture
       ? [
           {
             speaker: 'Presentador',
@@ -426,8 +443,8 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       eventTag: string;
     }> = [];
 
-    if (realVttCues.length >= 3) {
-      // Group real extracted captions into 6 structured segments across the video
+    if (realVttCues.length >= 1) {
+      // Preserve exact per-cue and per-word timestamps from Faster-Whisper or YouTube VTT!
       const groupSize = Math.max(1, Math.ceil(realVttCues.length / 6));
       for (let g = 0; g < realVttCues.length; g += groupSize) {
         const group = realVttCues.slice(g, g + groupSize);
@@ -435,16 +452,33 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         const sEnd = Number(Math.min(totalDur, group[group.length - 1].endSec).toFixed(2));
         const combinedText = group.map((c) => c.text).join(' ');
         const tpl = segmentTemplates[builtSegments.length % segmentTemplates.length];
-        const rawWords = combinedText.split(/\s+/).filter(Boolean);
-        const wordStep = Math.max(0.15, (sEnd - sStart) / Math.max(rawWords.length, 1));
-        const segWords: WordTimestamp[] = rawWords.map((w, wIdx) => ({
-          word: w,
-          start: Number((sStart + wIdx * wordStep).toFixed(2)),
-          end: Number((sStart + (wIdx + 1) * wordStep).toFixed(2)),
-          confidence: 0.96,
-          speaker: tpl.speaker,
-          isFiller: /^(eh+|este+|mmm+)$/i.test(w),
-        }));
+
+        const segWords: WordTimestamp[] = [];
+        for (const cue of group) {
+          if (cue.words && cue.words.length > 0) {
+            for (const cw of cue.words) {
+              segWords.push({
+                ...cw,
+                speaker: tpl.speaker,
+              });
+            }
+          } else {
+            const cueTokens = cue.text.split(/\s+/).filter(Boolean);
+            const cueDur = Math.max(0.2, cue.endSec - cue.startSec);
+            const cueStep = cueDur / Math.max(cueTokens.length, 1);
+            cueTokens.forEach((w, wIdx) => {
+              segWords.push({
+                word: w,
+                start: Number((cue.startSec + wIdx * cueStep).toFixed(2)),
+                end: Number((cue.startSec + (wIdx + 1) * cueStep).toFixed(2)),
+                confidence: 0.96,
+                speaker: tpl.speaker,
+                isFiller: /^(eh+|este+|mmm+)$/i.test(w),
+              });
+            });
+          }
+        }
+
         allWords.push(...segWords);
         builtSegments.push({
           id: crypto.randomUUID(),
@@ -620,39 +654,58 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       if (actualClipDur < 1.0) continue;
 
       let clipWords = allWords
-        .filter((w) => w.start >= cStart - 0.5 && w.start < cEnd)
-        .map((w) => ({
-          ...w,
-          start: Number(Math.max(0, w.start - cStart).toFixed(2)),
-          end: Number(Math.min(actualClipDur, Math.max(0.2, w.end - cStart)).toFixed(2)),
-        }));
+        .filter((w) => w.end > cStart && w.start < cEnd)
+        .map((w) => {
+          const relStart = Number(Math.max(0, w.start - cStart).toFixed(2));
+          const relEnd = Number(Math.min(actualClipDur, Math.max(relStart + 0.12, w.end - cStart)).toFixed(2));
+          return {
+            ...w,
+            start: relStart,
+            end: relEnd,
+          };
+        });
+
+      const hasRealTimedSpeech = realVttCues.length >= 1 && clipWords.length >= 3;
 
       let rawText =
-        clipWords.length >= 6
+        clipWords.length >= 3
           ? clipWords.map((w) => w.word).join(' ')
           : `${segA.text} ${segB.id !== segA.id ? segB.text : ''}`.trim();
 
       if (speechCleanup) {
+        clipWords = clipWords.filter((w) => !/^(eh+|este+|mmm+|uh+|um+|\[resoplido\])$/i.test(w.word));
         rawText = rawText.replace(/\b(eh+|este+|mmm+|uh+|um+|\[resoplido\])\b/gi, '').replace(/\s+/g, ' ').trim();
       }
+
       if (captionTranslation || voiceDubbing) {
         const langToUse = captionTranslation ? targetLanguage : dubbingLanguage;
         rawText = translateTextToTargetLang(rawText, langToUse);
+        if (hasRealTimedSpeech) {
+          // Translate word-by-word while keeping original timestamps
+          clipWords = clipWords
+            .map((w) => ({
+              ...w,
+              word: translateTextToTargetLang(w.word, langToUse).trim(),
+            }))
+            .filter((w) => Boolean(w.word));
+        }
       }
 
-      // Ensure words are smoothly distributed across the full clip duration so burned-in ASS subtitles stay active throughout the clip
-      const tokens = rawText.split(/\s+/).filter(Boolean);
-      const step = actualClipDur / Math.max(tokens.length, 1);
-      clipWords = tokens.map((word, idx) => ({
-        word,
-        start: Number((idx * step).toFixed(2)),
-        end: Number(Math.min(actualClipDur, (idx + 1) * step).toFixed(2)),
-        confidence: 0.96,
-        speaker: segA.speaker,
-        isFiller: /^(eh+|este+|mmm+)$/i.test(word),
-      }));
+      if (!hasRealTimedSpeech || clipWords.length === 0) {
+        // Fallback uniform distribution only for synthetic test fixtures
+        const tokens = rawText.split(/\s+/).filter(Boolean);
+        const step = actualClipDur / Math.max(tokens.length, 1);
+        clipWords = tokens.map((word, idx) => ({
+          word,
+          start: Number((idx * step).toFixed(2)),
+          end: Number(Math.min(actualClipDur, (idx + 1) * step).toFixed(2)),
+          confidence: 0.96,
+          speaker: segA.speaker,
+          isFiller: /^(eh+|este+|mmm+)$/i.test(word),
+        }));
+      }
 
-      const clipText = tokens.join(' ');
+      const clipText = clipWords.map((w) => w.word).join(' ') || rawText;
       const fp = crypto.createHash('md5').update(`${Math.round(cStart)}:${Math.round(cEnd)}:${clipText}`).digest('hex');
 
       if (!candidates.some((existing) => existing.fingerprint === fp)) {

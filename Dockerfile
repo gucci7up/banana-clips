@@ -3,16 +3,19 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 
-# Install FFmpeg (with libx264, aac, libass), fonts for ASS subtitle burn-in, Python 3, curl, ca-certificates, and latest yt-dlp
+# Install FFmpeg (with libx264, aac, libass), fonts for ASS subtitle burn-in, Python 3, faster-whisper ASR, curl, ca-certificates, and latest yt-dlp
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fonts-dejavu-core \
     fonts-liberation \
     fontconfig \
     python3 \
+    python3-pip \
     curl \
     ca-certificates \
     && fc-cache -f -v \
+    && pip3 install --break-system-packages --no-cache-dir faster-whisper \
+    && python3 -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')" \
     && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp \
     && rm -rf /var/lib/apt/lists/*

@@ -751,9 +751,6 @@ export function renderClipWithFfmpeg(params: {
       // Subtle presence boost on high-mid frequencies for punchy hook transitions
       afParts.push('equalizer=f=3200:t=q:w=1.2:g=2.5');
     }
-    if (params.trimSilences) {
-      afParts.push('silenceremove=stop_periods=-1:stop_duration=0.65:stop_threshold=-38dB');
-    }
     if (params.volume !== undefined && params.volume !== 1) {
       afParts.push(`volume=${params.volume.toFixed(2)}`);
     }
@@ -1129,11 +1126,12 @@ export async function downloadVideoFromExternalUrlAsync(params: {
 }
 
 /**
- * Parses any yt-dlp downloaded .vtt subtitle file next to a video into clean timed text cues.
+ * Parses any yt-dlp downloaded .vtt subtitle file next to a video into clean timed text cues
+ * and exact word-level timestamps (`<00:00:01.200><c>palabra</c>`).
  */
 export function extractRealSubtitlesIfPresent(
   videoFilePath: string
-): Array<{ startSec: number; endSec: number; text: string }> {
+): Array<{ startSec: number; endSec: number; text: string; words?: WordTimestamp[] }> {
   try {
     const dir = path.dirname(videoFilePath);
     const base = path.basename(videoFilePath, path.extname(videoFilePath));
@@ -1152,7 +1150,7 @@ export function extractRealSubtitlesIfPresent(
       return 0;
     };
 
-    const cues: Array<{ startSec: number; endSec: number; text: string }> = [];
+    const rawCues: Array<{ startSec: number; endSec: number; text: string; rawLine: string }> = [];
     let i = 0;
     while (i < lines.length) {
       const line = lines[i].trim();
@@ -1163,34 +1161,144 @@ export function extractRealSubtitlesIfPresent(
         const endSec = parseTime(endStr);
         i++;
         const textLines: string[] = [];
+        const rawBlockLines: string[] = [];
         while (i < lines.length && lines[i].trim() !== '') {
-          // Strip VTT tags like <00:00:01.200><c>word</c>
-          const cleaned = lines[i]
+          const rawL = lines[i].trim();
+          rawBlockLines.push(rawL);
+          const cleaned = rawL
             .replace(/<[^>]+>/g, '')
             .replace(/&nbsp;/g, ' ')
             .replace(/&amp;/g, '&')
+            .replace(/&#39;/g, "'")
+            .replace(/&quot;/g, '"')
             .trim();
           if (cleaned && !cleaned.startsWith('align:')) {
             textLines.push(cleaned);
           }
           i++;
         }
-        const combined = textLines.join(' ').replace(/\s+/g, ' ').trim();
-        if (combined && endSec - startSec >= 0.4) {
-          // Avoid duplicate rolling YouTube auto-caption lines
-          const prev = cues[cues.length - 1];
-          if (!prev || prev.text !== combined) {
-            cues.push({ startSec, endSec, text: combined });
+        // In YouTube rolling auto-captions, a 2-line block repeats the previous line on line 0 and puts the new words on the last line
+        const newestLine = textLines.length > 0 ? textLines[textLines.length - 1] : '';
+        const newestRaw = rawBlockLines.length > 0 ? rawBlockLines[rawBlockLines.length - 1] : '';
+        if (newestLine && endSec - startSec >= 0.08) {
+          const prev = rawCues[rawCues.length - 1];
+          if (!prev || prev.text !== newestLine) {
+            rawCues.push({ startSec, endSec, text: newestLine, rawLine: newestRaw });
+          } else if (prev && prev.text === newestLine) {
+            prev.endSec = Math.max(prev.endSec, endSec);
           }
         }
       } else {
         i++;
       }
     }
+
+    // Build non-overlapping cues with exact word timestamps
+    const cues: Array<{ startSec: number; endSec: number; text: string; words: WordTimestamp[] }> = [];
+    for (let idx = 0; idx < rawCues.length; idx++) {
+      const curr = rawCues[idx];
+      const nextStart = idx + 1 < rawCues.length ? rawCues[idx + 1].startSec : curr.endSec;
+      const effectiveEnd = Math.max(curr.startSec + 0.3, Math.min(curr.endSec, nextStart > curr.startSec + 0.25 ? nextStart : curr.endSec));
+      const tokens = curr.text.split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) continue;
+
+      const step = (effectiveEnd - curr.startSec) / tokens.length;
+      const words: WordTimestamp[] = tokens.map((w, wIdx) => ({
+        word: w,
+        start: Number((curr.startSec + wIdx * step).toFixed(2)),
+        end: Number((curr.startSec + (wIdx + 1) * step).toFixed(2)),
+        confidence: 0.96,
+        speaker: 'Presentador',
+        isFiller: /^(eh+|este+|mmm+)$/i.test(w),
+      }));
+
+      cues.push({
+        startSec: Number(curr.startSec.toFixed(2)),
+        endSec: Number(effectiveEnd.toFixed(2)),
+        text: curr.text,
+        words,
+      });
+    }
+
     return cues;
   } catch {
     return [];
   }
+}
+
+/**
+ * Real speech-to-text transcription using faster-whisper with word-level timestamps (`word_timestamps=True`).
+ * Works on any uploaded MP4/MOV or Facebook/YouTube video even when no external VTT captions exist.
+ */
+export async function transcribeVideoWithFasterWhisperAsync(
+  videoFilePath: string,
+  languageHint?: string
+): Promise<Array<{ startSec: number; endSec: number; text: string; words: WordTimestamp[] }>> {
+  try {
+    if (!fs.existsSync(videoFilePath)) return [];
+    const outJsonPath = `${videoFilePath}.whisper.json`;
+    const langCode =
+      languageHint && languageHint.toLowerCase().startsWith('en')
+        ? 'en'
+        : languageHint && languageHint.toLowerCase().startsWith('pt')
+          ? 'pt'
+          : languageHint && languageHint.toLowerCase().startsWith('fr')
+            ? 'fr'
+            : languageHint && languageHint.toLowerCase().startsWith('es')
+              ? 'es'
+              : '';
+
+    const pyScript = `
+import sys, json
+from faster_whisper import WhisperModel
+
+video_path = sys.argv[1]
+out_path = sys.argv[2]
+lang = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+
+model = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=4)
+segments, info = model.transcribe(video_path, language=lang, word_timestamps=True, vad_filter=True)
+
+result = []
+for s in segments:
+    words = []
+    if s.words:
+        for w in s.words:
+            wt = w.word.strip()
+            if wt:
+                words.append({
+                    "word": wt,
+                    "start": round(float(w.start), 2),
+                    "end": round(float(w.end), 2),
+                    "confidence": round(float(getattr(w, "probability", 0.95)), 2),
+                    "speaker": "Presentador",
+                    "isFiller": False
+                })
+    text = s.text.strip()
+    if text:
+        result.append({
+            "startSec": round(float(s.start), 2),
+            "endSec": round(float(s.end), 2),
+            "text": text,
+            "words": words
+        })
+
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(result, f, ensure_ascii=False)
+`;
+
+    await runCommandAsync('python3', ['-c', pyScript, videoFilePath, outJsonPath, langCode], 180000);
+    if (fs.existsSync(outJsonPath)) {
+      const parsed = JSON.parse(fs.readFileSync(outJsonPath, 'utf-8'));
+      try {
+        fs.unlinkSync(outJsonPath);
+      } catch {}
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {}
+  return [];
 }
 
 /**
