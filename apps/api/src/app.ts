@@ -13,6 +13,7 @@ import {
 } from '@banana/database';
 import { SUBTITLE_TEMPLATES, validateSafeExternalUrl } from '@banana/shared';
 import {
+  buildPremiereXmlForClip,
   computeEmbedding384,
   cosineSimilarity,
   ensureFixtureVideo,
@@ -1096,7 +1097,14 @@ export async function createBananaApiApp(): Promise<Express> {
       gameId = 'fortnite',
       subtitleTemplate = 'Bold',
       burnSubtitles = true,
-      videoEffect = 'VIBRANT_BOOST',
+      videoEffect = 'AI_BROLL_CUTAWAY',
+      autoEmojis = true,
+      hookBanner = true,
+      brandWatermarkText = '@BananaClips',
+      ctaOutro = true,
+      ctaOutroText = 'SÍGUENOS Y COMPARTE PARA MÁS',
+      audioEnhancer = true,
+      trimSilences = false,
       syncExecution = false,
     } = req.body || {};
 
@@ -1118,6 +1126,13 @@ export async function createBananaApiApp(): Promise<Express> {
       subtitleTemplate,
       burnSubtitles: Boolean(burnSubtitles),
       videoEffect,
+      autoEmojis: Boolean(autoEmojis),
+      hookBanner: Boolean(hookBanner),
+      brandWatermarkText: String(brandWatermarkText || ''),
+      ctaOutro: Boolean(ctaOutro),
+      ctaOutroText: String(ctaOutroText || ''),
+      audioEnhancer: Boolean(audioEnhancer),
+      trimSilences: Boolean(trimSilences),
     };
 
     await db.query(
@@ -1234,9 +1249,50 @@ export async function createBananaApiApp(): Promise<Express> {
       signedDownloadUrl: c.storageObjectId
         ? signStorageObjectUrl({ storageObjectId: c.storageObjectId, userId: c.userId }).url
         : null,
+      xmlExportUrl: `/api/v1/clips/${c.id}/xml`,
     }));
 
     return res.json({ clips });
+  });
+
+  // OpusClip XML Export for Adobe Premiere Pro, DaVinci Resolve & Final Cut Pro
+  router.get('/clips/:id/xml', async (req: AuthenticatedRequest, res) => {
+    const clipId = req.params.id;
+    const cRes = await db.query(
+      `SELECT c.*, v."originalFilename"
+       FROM "Clip" c
+       LEFT JOIN "Video" v ON c."videoId" = v.id
+       WHERE c.id = $1 LIMIT 1`,
+      [clipId]
+    );
+    if (cRes.rows.length === 0) return res.status(404).json({ error: 'CLIP_NOT_FOUND' });
+    const clip = cRes.rows[0];
+
+    const ct = await db.query<{ wordsJson: any }>(`SELECT "wordsJson" FROM "ClipTranscript" WHERE "clipId" = $1 LIMIT 1`, [
+      clipId,
+    ]);
+    const words = ct.rows[0]?.wordsJson
+      ? typeof ct.rows[0].wordsJson === 'string'
+        ? JSON.parse(ct.rows[0].wordsJson)
+        : ct.rows[0].wordsJson
+      : [];
+
+    const xml = buildPremiereXmlForClip({
+      clipId: clip.id,
+      clipTitle: clip.title,
+      sourceFilename: clip.originalFilename || `clip_${clip.id}.mp4`,
+      startSec: Number(clip.startSec || 0),
+      endSec: Number(clip.endSec || clip.durationSec || 30),
+      durationSec: Number(clip.durationSec || 30),
+      words,
+    });
+
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${clip.title.replace(/[^a-z0-9_-]/gi, '_')}_Premiere_DaVinci.xml"`
+    );
+    return res.send(xml);
   });
 
   router.get('/clips/:id', requireAuth, async (req: AuthenticatedRequest, res) => {

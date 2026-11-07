@@ -285,7 +285,16 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         ? (config.subtitleTemplate as SubtitleTemplateName)
         : 'Bold';
     const burnSubtitles: boolean = config.burnSubtitles !== false;
-    const videoEffect: VideoEffectPreset = (config.videoEffect as VideoEffectPreset) || 'VIBRANT_BOOST';
+    const videoEffect: VideoEffectPreset = (config.videoEffect as VideoEffectPreset) || 'AI_BROLL_CUTAWAY';
+    const autoEmojis: boolean = config.autoEmojis !== false;
+    const hookBanner: boolean = config.hookBanner !== false;
+    const brandWatermarkText: string =
+      config.brandWatermarkText !== undefined ? String(config.brandWatermarkText) : '@BananaClips';
+    const ctaOutro: boolean = config.ctaOutro !== false;
+    const ctaOutroText: string =
+      config.ctaOutroText !== undefined ? String(config.ctaOutroText) : 'SÍGUENOS Y COMPARTE PARA MÁS';
+    const audioEnhancer: boolean = config.audioEnhancer !== false;
+    const trimSilences: boolean = Boolean(config.trimSilences);
 
     // Construct rich, accurate sentence segments spanning the actual duration of the video
     const totalDur = probeMeta.durationSeconds;
@@ -658,8 +667,17 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       const thumbFileRel = `banana-thumbnails/clip_${clipId}.jpg`;
       const thumbFileAbs = path.join(storageRoot, thumbFileRel);
 
+      const cleanHeadline = cand.text.replace(/[¿?¡!.,[\]]/g, '').split(/\s+/).filter(Boolean).slice(0, 7).join(' ');
+      const title = `Clip #${i + 1}: ${cleanHeadline}`;
+
       const { srt: clipSrt, vtt: clipVtt } = buildSrtAndVttFromWords(cand.words, 4);
-      const assContent = generateAssSubtitles(cand.words, selectedSubtitleStyle, assPlayResX, assPlayResY);
+      const assContent = generateAssSubtitles(cand.words, selectedSubtitleStyle, assPlayResX, assPlayResY, {
+        autoEmojis,
+        hookBannerText: hookBanner ? cleanHeadline : undefined,
+        brandWatermarkText: brandWatermarkText.trim() || undefined,
+        ctaOutroText: ctaOutro ? ctaOutroText : undefined,
+        clipDurationSec: durationSec,
+      });
       const assFileAbs = path.join(storageRoot, 'banana-clips', `sub_${clipId}.ass`);
       fs.writeFileSync(assFileAbs, assContent, 'utf-8');
 
@@ -672,9 +690,12 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         resolution: '720p',
         subtitleAssPath: burnSubtitles ? assFileAbs : undefined,
         videoEffect,
+        audioEnhancer,
+        trimSilences,
       });
 
-      generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(0.5, durationSec / 2));
+      // Capture viral thumbnail at 1.2s so the burned-in Hook Banner + Subtitles appear on the cover
+      generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(1.2, durationSec / 2));
 
       const storageObjId = crypto.randomUUID();
       await db.query(
@@ -683,8 +704,6 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         [storageObjId, job.userId, `clip_${clipId}.mp4`, clipFileAbs, renderedMeta.fileSizeBytes]
       );
 
-      const cleanHeadline = cand.text.replace(/[¿?¡!.,]/g, '').split(/\s+/).slice(0, 7).join(' ');
-      const title = `Clip #${i + 1}: ${cleanHeadline}`;
       const altTitle = `Momento Destacado (${durationSec}s) — ${video.title}`;
       const description = `${cand.text}\n\nGenerado automáticamente por BANANA CLIPS AI STUDIO.`;
       const hashtags = ['#shorts', '#reels', '#tiktok', '#bananaclips', '#ia', '#highlights'];

@@ -38,7 +38,13 @@ export default function AiClippingPage() {
   const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '1:1' | '4:5'>('9:16');
   const [burnSubtitles, setBurnSubtitles] = useState<boolean>(true);
   const [subtitleTemplate, setSubtitleTemplate] = useState<string>('Bold');
-  const [videoEffect, setVideoEffect] = useState<string>('VIBRANT_BOOST');
+  const [videoEffect, setVideoEffect] = useState<string>('AI_BROLL_CUTAWAY');
+  const [autoEmojis, setAutoEmojis] = useState<boolean>(true);
+  const [hookBanner, setHookBanner] = useState<boolean>(true);
+  const [brandWatermarkText, setBrandWatermarkText] = useState<string>('@BananaClips');
+  const [ctaOutro, setCtaOutro] = useState<boolean>(true);
+  const [audioEnhancer, setAudioEnhancer] = useState<boolean>(true);
+  const [trimSilences, setTrimSilences] = useState<boolean>(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState('');
   const [externalUrl, setExternalUrl] = useState('');
@@ -111,6 +117,12 @@ export default function AiClippingPage() {
           burnSubtitles,
           subtitleTemplate,
           videoEffect,
+          autoEmojis,
+          hookBanner,
+          brandWatermarkText,
+          ctaOutro,
+          audioEnhancer,
+          trimSilences,
           syncExecution: false,
         }),
       });
@@ -341,40 +353,102 @@ export default function AiClippingPage() {
               />
             </div>
             {burnSubtitles && (
-              <div>
-                <label className="block text-[11px] text-[#94A3B8]">Plantilla de Estilo de Subtítulos</label>
-                <select
-                  value={subtitleTemplate}
-                  onChange={(e) => setSubtitleTemplate(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-700 bg-[#1B1E25] p-2 text-xs text-[#F8FAFC]"
-                >
-                  <option value="Bold">Bold — Impacto TikTok / Shorts (Amarillo + Blanco)</option>
-                  <option value="Karaoke">Karaoke — Resaltado por palabra con caja oscura</option>
-                  <option value="Neon">Neon — Cian brillante + borde púrpura</option>
-                  <option value="Gaming">Gaming — Estilo Streamer de alto contraste</option>
-                  <option value="Dynamic">Dynamic — Pop celeste dinámico</option>
-                  <option value="Podcast">Podcast — Limpio y profesional</option>
-                  <option value="Classic">Classic — Estándar legible</option>
-                  <option value="Minimal">Minimal — Compacto con fondo translúcido</option>
-                  <option value="Premium">Premium — Dorado editorial</option>
-                </select>
+              <div className="space-y-2">
+                <div>
+                  <label className="block text-[11px] text-[#94A3B8]">Plantilla de Estilo de Subtítulos</label>
+                  <select
+                    value={subtitleTemplate}
+                    onChange={(e) => setSubtitleTemplate(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-slate-700 bg-[#1B1E25] p-2 text-xs text-[#F8FAFC]"
+                  >
+                    <option value="Bold">Bold — Impacto TikTok / Shorts (Amarillo + Blanco)</option>
+                    <option value="Karaoke">Karaoke — Resaltado por palabra con caja oscura</option>
+                    <option value="Neon">Neon — Cian brillante + borde púrpura</option>
+                    <option value="Gaming">Gaming — Estilo Streamer de alto contraste</option>
+                    <option value="Dynamic">Dynamic — Pop celeste dinámico</option>
+                    <option value="Podcast">Podcast — Limpio y profesional</option>
+                    <option value="Classic">Classic — Estándar legible</option>
+                    <option value="Minimal">Minimal — Compacto con fondo translúcido</option>
+                    <option value="Premium">Premium — Dorado editorial</option>
+                  </select>
+                </div>
+                <label className="flex items-center justify-between text-[11px] text-[#F8FAFC]">
+                  <span>Auto Emojis + Resaltador Palabras Clave (3 Colores)</span>
+                  <input
+                    type="checkbox"
+                    checked={autoEmojis}
+                    onChange={(e) => setAutoEmojis(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[#FFD43B]"
+                  />
+                </label>
+                <label className="flex items-center justify-between text-[11px] text-[#F8FAFC]">
+                  <span>Banner de Hook Viral Superior (Primeros 3.5s)</span>
+                  <input
+                    type="checkbox"
+                    checked={hookBanner}
+                    onChange={(e) => setHookBanner(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[#FFD43B]"
+                  />
+                </label>
+                <label className="flex items-center justify-between text-[11px] text-[#F8FAFC]">
+                  <span>Banner CTA Final ("Síguenos y Comparte")</span>
+                  <input
+                    type="checkbox"
+                    checked={ctaOutro}
+                    onChange={(e) => setCtaOutro(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[#FFD43B]"
+                  />
+                </label>
+                <div>
+                  <label className="block text-[11px] text-[#94A3B8]">Brand Kit / Marca de Agua en Esquina</label>
+                  <input
+                    type="text"
+                    value={brandWatermarkText}
+                    onChange={(e) => setBrandWatermarkText(e.target.value)}
+                    placeholder="@TuCanal (déjalo vacío para ocultar)"
+                    className="mt-1 w-full rounded-lg border border-slate-700 bg-[#1B1E25] px-2.5 py-1.5 text-xs text-[#F8FAFC]"
+                  />
+                </div>
               </div>
             )}
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-[#94A3B8]">Efectos Visuales de Video (FFmpeg)</label>
-            <select
-              value={videoEffect}
-              onChange={(e) => setVideoEffect(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-xs text-[#F8FAFC]"
-            >
-              <option value="VIBRANT_BOOST">Color Vibrante + Nitidez HD (Recomendado)</option>
-              <option value="DYNAMIC_ZOOM">Zoom Dinámico + Punch Visual (108%)</option>
-              <option value="CINEMATIC_CONTRAST">Contraste Cinematográfico + Fade In</option>
-              <option value="FADE_TRANSITIONS">Transición Suave de Entrada y Salida (Fade In/Out)</option>
-              <option value="NONE">Original (Sin efectos adicionales)</option>
-            </select>
+          <div className="rounded-xl border border-slate-800 bg-[#111318] p-3 space-y-2.5">
+            <div>
+              <label className="block text-xs font-bold text-[#FFD43B]">
+                AI B-Roll & Efectos Visuales / Audio (OpusPro Suite)
+              </label>
+              <select
+                value={videoEffect}
+                onChange={(e) => setVideoEffect(e.target.value)}
+                className="mt-1.5 w-full rounded-xl border border-slate-700 bg-[#1B1E25] p-2 text-xs text-[#F8FAFC]"
+              >
+                <option value="AI_BROLL_CUTAWAY">AI B-Roll Cutaway + Cámara Activa + Color HD (Recomendado)</option>
+                <option value="VIBRANT_BOOST">Color Vibrante + Nitidez HD</option>
+                <option value="DYNAMIC_ZOOM">Zoom Dinámico + Punch Visual (108%)</option>
+                <option value="CINEMATIC_CONTRAST">Contraste Cinematográfico + Fade In</option>
+                <option value="FADE_TRANSITIONS">Transición Suave Entrada y Salida (Fade In/Out)</option>
+                <option value="NONE">Original (Sin efectos visuales)</option>
+              </select>
+            </div>
+            <label className="flex items-center justify-between text-[11px] text-[#F8FAFC]">
+              <span>AI Studio Audio Enhancer (Limpieza de Ruido + Compresor)</span>
+              <input
+                type="checkbox"
+                checked={audioEnhancer}
+                onChange={(e) => setAudioEnhancer(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[#FFD43B]"
+              />
+            </label>
+            <label className="flex items-center justify-between text-[11px] text-[#F8FAFC]">
+              <span>Eliminar Silencios Automáticamente (Silence Remove)</span>
+              <input
+                type="checkbox"
+                checked={trimSilences}
+                onChange={(e) => setTrimSilences(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[#FFD43B]"
+              />
+            </label>
           </div>
 
           <button
@@ -529,6 +603,14 @@ export default function AiClippingPage() {
                           <Download className="h-3.5 w-3.5" /> Descargar MP4
                         </a>
                       )}
+                      <a
+                        href={`/api/v1/clips/${clip.id}/xml`}
+                        download={`${clip.title}.xml`}
+                        className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-[#FFD43B] hover:border-[#FFD43B]"
+                        title="Exportar proyecto XML para Adobe Premiere Pro, DaVinci Resolve o Final Cut"
+                      >
+                        <Download className="h-3.5 w-3.5" /> XML (Premiere/DaVinci)
+                      </a>
                       <Link
                         href={`/ai-montage?addClipId=${clip.id}`}
                         className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-[#94A3B8] hover:text-white"

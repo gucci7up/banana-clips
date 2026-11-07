@@ -125,13 +125,20 @@ export default function MediaLibraryPage() {
                   <p className="mt-1 text-xs text-[#94A3B8] line-clamp-2">{c.explanation}</p>
                 </div>
 
-                <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3 text-xs">
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3 text-xs">
                   <Link
                     href={`/editor?clipId=${c.id}`}
                     className="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold hover:border-[#FFD43B]"
                   >
                     <Edit3 className="h-3.5 w-3.5" /> Editar
                   </Link>
+                  <a
+                    href={`/api/v1/clips/${c.id}/xml`}
+                    download={`${c.title}.xml`}
+                    className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 font-semibold text-[#FFD43B] hover:border-[#FFD43B]"
+                  >
+                    <Download className="h-3.5 w-3.5" /> XML (Premiere/DaVinci)
+                  </a>
                   {c.signedDownloadUrl && (
                     <a
                       href={c.signedDownloadUrl}

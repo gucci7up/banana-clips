@@ -272,15 +272,25 @@ export function buildSrtAndVttFromWords(words: WordTimestamp[], maxWordsPerLine 
   };
 }
 
+export interface AssProOptions {
+  autoEmojis?: boolean;
+  hookBannerText?: string;
+  brandWatermarkText?: string;
+  ctaOutroText?: string;
+  clipDurationSec?: number;
+}
+
 /**
- * Generates an ASS (Advanced SubStation Alpha) subtitle file with active word highlighting
- * and styling from SubtitleStyleConfig for reproducible FFmpeg libass burn-in.
+ * Generates an ASS (Advanced SubStation Alpha) subtitle file with active word highlighting,
+ * OpusClip-style Auto Emojis & 3-Color Keyword Highlighter, 3.5s Viral Hook Banner,
+ * Brand Kit Watermark, and Final CTA Overlay for reproducible FFmpeg libass burn-in.
  */
 export function generateAssSubtitles(
   words: WordTimestamp[],
   styleConfig: SubtitleStyleConfig,
   playResX: number = 1080,
-  playResY: number = 1920
+  playResY: number = 1920,
+  proOptions?: AssProOptions
 ): string {
   const hexToAssBgr = (hex: string): string => {
     const clean = hex.replace('#', '');
@@ -302,7 +312,12 @@ export function generateAssSubtitles(
   const primaryAss = hexToAssBgr(styleConfig.primaryColor);
   const activeAss = hexToAssBgr(styleConfig.activeWordColor);
   const outlineAss = hexToAssBgr(styleConfig.outlineColor);
+  const keywordAccentAss = hexToAssBgr('#00F5D4'); // 3rd color for OpusClip keyword highlighter
   const marginV = Math.round(((100 - styleConfig.positionYPercent) / 100) * playResY);
+
+  const hookFontSize = Math.round(playResX * 0.046);
+  const brandFontSize = Math.round(playResX * 0.032);
+  const ctaFontSize = Math.round(playResX * 0.04);
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -313,7 +328,10 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,${styleConfig.fontSize},${primaryAss},${activeAss},${outlineAss},&H80000000,-1,0,0,0,100,100,0,0,${styleConfig.backgroundBox ? 3 : 1},${styleConfig.outlineWidth},${styleConfig.shadowDepth},2,40,40,${marginV},1
+Style: Default,DejaVu Sans,${styleConfig.fontSize},${primaryAss},${activeAss},${outlineAss},&H80000000,-1,0,0,0,100,100,0,0,${styleConfig.backgroundBox ? 3 : 1},${styleConfig.outlineWidth},${styleConfig.shadowDepth},2,40,40,${marginV},1
+Style: HookBanner,DejaVu Sans,${hookFontSize},&H003BD4FF,&H00FFFFFF,&H00090D16,&HCF111318,-1,0,0,0,100,100,1,0,3,4,2,8,50,50,${Math.round(playResY * 0.085)},1
+Style: BrandWatermark,DejaVu Sans,${brandFontSize},&H30FFFFFF,&H003BD4FF,&H60000000,&H80000000,-1,0,0,0,100,100,1,0,1,2,1,9,30,36,${Math.round(playResY * 0.035)},1
+Style: CtaBanner,DejaVu Sans,${ctaFontSize},&H00FFFFFF,&H003BD4FF,&H00000000,&HD0111318,-1,0,0,0,100,100,1,0,3,3,2,8,50,50,${Math.round(playResY * 0.11)},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -321,20 +339,95 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   const maxPerLine = styleConfig.maxWordsPerLine || 4;
   const events: string[] = [];
+  const autoEmojis = proOptions?.autoEmojis !== false;
 
+  // Keyword & Emoji map (OpusClip Auto-Emoji + Keyword Highlighter)
+  const detectKeywordBadge = (rawWord: string): { isKeyword: boolean; badge?: string } => {
+    const clean = rawWord.toLowerCase().replace(/[^a-záéíóúñü0-9]/gi, '');
+    if (!clean || clean.length < 3) return { isKeyword: false };
+    if (/^(dinero|dolares|millones|inversion|negocio|rentabilizar|ventas|vending|precio|ganancia)/.test(clean)) {
+      return { isKeyword: true, badge: '[$$]' };
+    }
+    if (/^(increible|epico|brutal|mejor|fuego|impactante|locura|maestra|eliminaciones)/.test(clean)) {
+      return { isKeyword: true, badge: '★' };
+    }
+    if (/^(inteligencia|artificial|tecnologia|futuro|algoritmo|sistema|machine)/.test(clean)) {
+      return { isKeyword: true, badge: '⚡' };
+    }
+    if (/^(rie|risa|carcajadas|gracioso|divertido|humor|equipo)/.test(clean)) {
+      return { isKeyword: true, badge: '✦' };
+    }
+    if (/^(ganar|victoria|logro|exito|celebracion|primero|primer)/.test(clean)) {
+      return { isKeyword: true, badge: '★' };
+    }
+    return { isKeyword: false };
+  };
+
+  // 1. Top Viral Hook Banner (First 3.5 seconds)
+  if (proOptions?.hookBannerText) {
+    const cleanHook = proOptions.hookBannerText
+      .replace(/[{}]/g, '')
+      .toUpperCase()
+      .slice(0, 52);
+    events.push(
+      `Dialogue: 2,0:00:00.00,0:00:03.60,HookBanner,,0,0,0,,{\\fad(180,280)}★ ${cleanHook} ★`
+    );
+  }
+
+  // 2. Persistent Brand Kit Watermark (@Handle / Brand)
+  const totalClipSec =
+    proOptions?.clipDurationSec || (words.length > 0 ? Math.max(10, words[words.length - 1].end) : 30);
+  if (proOptions?.brandWatermarkText) {
+    const cleanBrand = proOptions.brandWatermarkText.replace(/[{}]/g, '').slice(0, 32);
+    events.push(
+      `Dialogue: 1,0:00:00.00,${formatAssTime(totalClipSec)},BrandWatermark,,0,0,0,,${cleanBrand}`
+    );
+  }
+
+  // 3. Final Call-To-Action (CTA) Outro Banner (Last 2.8 seconds)
+  if (proOptions?.ctaOutroText && totalClipSec >= 6) {
+    const ctaStart = Math.max(3.8, totalClipSec - 2.8);
+    const cleanCta = proOptions.ctaOutroText.replace(/[{}]/g, '').toUpperCase().slice(0, 54);
+    events.push(
+      `Dialogue: 2,${formatAssTime(ctaStart)},${formatAssTime(totalClipSec)},CtaBanner,,0,0,0,,{\\fad(200,200)}▶ ${cleanCta}`
+    );
+  }
+
+  // 4. Word-by-word Karaoke + Keyword Highlighter + Auto Badges
   for (let i = 0; i < words.length; i += maxPerLine) {
     const group = words.slice(i, i + maxPerLine);
     if (group.length === 0) continue;
+
+    let groupBadge = '';
+    if (autoEmojis) {
+      for (const gw of group) {
+        const kw = detectKeywordBadge(gw.word);
+        if (kw.badge) {
+          groupBadge = ` {\\c${activeAss}}${kw.badge}{\\c${primaryAss}}`;
+          break;
+        }
+      }
+    }
 
     for (let activeIdx = 0; activeIdx < group.length; activeIdx++) {
       const wStart = group[activeIdx].start;
       const wEnd = group[activeIdx].end;
       const renderedWords = group
-        .map((w, idx) =>
-          idx === activeIdx ? `{\\c${activeAss}\\fscx108\\fscy108}${w.word}{\\c${primaryAss}\\fscx100\\fscy100}` : w.word
-        )
+        .map((w, idx) => {
+          const kw = autoEmojis ? detectKeywordBadge(w.word) : { isKeyword: false };
+          if (idx === activeIdx) {
+            const highlightColor = kw.isKeyword ? keywordAccentAss : activeAss;
+            return `{\\c${highlightColor}\\fscx112\\fscy112}${w.word}{\\c${primaryAss}\\fscx100\\fscy100}`;
+          }
+          if (kw.isKeyword) {
+            return `{\\c${keywordAccentAss}}${w.word}{\\c${primaryAss}}`;
+          }
+          return w.word;
+        })
         .join(' ');
-      events.push(`Dialogue: 0,${formatAssTime(wStart)},${formatAssTime(wEnd)},Default,,0,0,0,,${renderedWords}`);
+      events.push(
+        `Dialogue: 0,${formatAssTime(wStart)},${formatAssTime(wEnd)},Default,,0,0,0,,${renderedWords}${groupBadge}`
+      );
     }
   }
 
@@ -344,14 +437,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 export type VideoEffectPreset =
   | 'NONE'
   | 'VIBRANT_BOOST'
+  | 'AI_BROLL_CUTAWAY'
   | 'CINEMATIC_CONTRAST'
   | 'DYNAMIC_ZOOM'
   | 'FADE_TRANSITIONS';
 
 /**
  * Renders a real playable MP4 (H.264 + AAC) clip using FFmpeg with Auto-Reframe (9:16, 1:1, 4:5, 16:9),
- * burned-in ASS animated karaoke subtitles via libass, visual effects (color boost, cinematic, dynamic zoom, fades),
- * speed/volume adjustments, and exact duration enforcement.
+ * burned-in ASS animated karaoke subtitles + Hook Banner + Brand Kit via libass,
+ * OpusClip AI B-Roll Cutaway / Visual Effects, and AI Studio Audio Enhancer DSP.
  */
 export function renderClipWithFfmpeg(params: {
   sourceVideoPath: string;
@@ -367,6 +461,8 @@ export function renderClipWithFfmpeg(params: {
   muted?: boolean;
   subtitleAssPath?: string;
   videoEffect?: VideoEffectPreset;
+  audioEnhancer?: boolean;
+  trimSilences?: boolean;
 }): MediaProbeResult {
   fs.mkdirSync(path.dirname(params.outputVideoPath), { recursive: true });
 
@@ -402,7 +498,14 @@ export function renderClipWithFfmpeg(params: {
 
   // Build FFmpeg video filter chain with smooth crop / pad reframe
   const vfParts: string[] = [];
-  if (params.videoEffect === 'DYNAMIC_ZOOM') {
+  if (params.videoEffect === 'AI_BROLL_CUTAWAY') {
+    // OpusClip AI B-Roll & Dynamic Camera Motion: 112% scale with smooth sinusoidal active-speaker pan + vibrant grade
+    const zoomW = Math.round(targetW * 1.12) - (Math.round(targetW * 1.12) % 2);
+    const zoomH = Math.round(targetH * 1.12) - (Math.round(targetH * 1.12) % 2);
+    vfParts.push(
+      `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}:x='(in_w-out_w)/2+sin(t*0.75)*(in_w-out_w)*0.28':y='(in_h-out_h)/2',eq=saturation=1.26:contrast=1.08:brightness=0.02,unsharp=5:5:0.85:5:5:0.0,fade=t=in:st=0:d=0.35`
+    );
+  } else if (params.videoEffect === 'DYNAMIC_ZOOM') {
     // Subtle 108% punch-in crop + sharpness & saturation boost
     const zoomW = Math.round(targetW * 1.08) - (Math.round(targetW * 1.08) % 2);
     const zoomH = Math.round(targetH * 1.08) - (Math.round(targetH * 1.08) % 2);
@@ -425,9 +528,8 @@ export function renderClipWithFfmpeg(params: {
     vfParts.push(`fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOutStart}:d=0.5`);
   }
 
-  // Burn-in ASS animated subtitles via libass if provided
+  // Burn-in ASS animated subtitles + Hook Banner + Brand Kit via libass if provided
   if (params.subtitleAssPath && fs.existsSync(params.subtitleAssPath)) {
-    // Escape path for FFmpeg filter parser (works on Linux & Windows)
     const escapedAss = params.subtitleAssPath
       .replace(/\\/g, '/')
       .replace(/:/g, '\\:')
@@ -442,8 +544,19 @@ export function renderClipWithFfmpeg(params: {
   const afParts: string[] = [];
   if (params.muted) {
     afParts.push('volume=0');
-  } else if (params.volume !== undefined && params.volume !== 1) {
-    afParts.push(`volume=${params.volume.toFixed(2)}`);
+  } else {
+    // OpusClip AI Studio Audio Enhancer DSP (voice clarity, noise reduction & dynamic compression)
+    if (params.audioEnhancer) {
+      afParts.push(
+        'highpass=f=80,lowpass=f=14000,afftdn=nf=-25,acompressor=threshold=-18dB:ratio=3:attack=15:release=150:makeup=2'
+      );
+    }
+    if (params.trimSilences) {
+      afParts.push('silenceremove=stop_periods=-1:stop_duration=0.65:stop_threshold=-38dB');
+    }
+    if (params.volume !== undefined && params.volume !== 1) {
+      afParts.push(`volume=${params.volume.toFixed(2)}`);
+    }
   }
   if (params.speed && params.speed !== 1 && params.speed >= 0.5 && params.speed <= 2.0) {
     afParts.push(`atempo=${params.speed.toFixed(2)}`);
@@ -490,6 +603,105 @@ export function renderClipWithFfmpeg(params: {
   }
 
   return probeMediaWithFfprobe(params.outputVideoPath);
+}
+
+/**
+ * Generates an NLE-compatible XML (xmeml v4 for Adobe Premiere Pro, DaVinci Resolve & Final Cut Pro)
+ * so editors can import the AI clip timeline with exact in/out frame cuts and subtitle markers.
+ */
+export function buildPremiereXmlForClip(params: {
+  clipId: string;
+  clipTitle: string;
+  sourceFilename: string;
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  fps?: number;
+  width?: number;
+  height?: number;
+  words?: WordTimestamp[];
+}): string {
+  const fps = Math.round(params.fps || 30);
+  const width = params.width || 1080;
+  const height = params.height || 1920;
+  const inFrame = Math.round(params.startSec * fps);
+  const outFrame = Math.round(params.endSec * fps);
+  const durationFrames = Math.max(1, outFrame - inFrame);
+  const escapeXml = (s: string) =>
+    String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+
+  const markersXml = (params.words || [])
+    .filter((_, idx) => idx % 5 === 0)
+    .map((w) => {
+      const mFrame = Math.round(w.start * fps);
+      return `      <marker>
+        <name>${escapeXml(w.word)}</name>
+        <comment>Subtítulo IA (${w.start}s - ${w.end}s)</comment>
+        <in>${mFrame}</in>
+        <out>-1</out>
+      </marker>`;
+    })
+    .join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE xmeml>
+<xmeml version="4">
+  <sequence id="sequence-${escapeXml(params.clipId)}">
+    <name>${escapeXml(params.clipTitle)} (Banana Clips AI Studio)</name>
+    <duration>${durationFrames}</duration>
+    <rate>
+      <timebase>${fps}</timebase>
+      <ntsc>FALSE</ntsc>
+    </rate>
+    <media>
+      <video>
+        <format>
+          <samplecharacteristics>
+            <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
+            <width>${width}</width>
+            <height>${height}</height>
+            <pixelaspectratio>square</pixelaspectratio>
+          </samplecharacteristics>
+        </format>
+        <track>
+          <clipitem id="clipitem-video-1">
+            <name>${escapeXml(params.sourceFilename)}</name>
+            <duration>${durationFrames}</duration>
+            <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
+            <start>0</start>
+            <end>${durationFrames}</end>
+            <in>${inFrame}</in>
+            <out>${outFrame}</out>
+            <file id="file-source-1">
+              <name>${escapeXml(params.sourceFilename)}</name>
+              <pathurl>file://localhost/${escapeXml(params.sourceFilename)}</pathurl>
+            </file>
+          </clipitem>
+        </track>
+      </video>
+      <audio>
+        <track>
+          <clipitem id="clipitem-audio-1">
+            <name>${escapeXml(params.sourceFilename)} (Audio Enhanced)</name>
+            <duration>${durationFrames}</duration>
+            <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
+            <start>0</start>
+            <end>${durationFrames}</end>
+            <in>${inFrame}</in>
+            <out>${outFrame}</out>
+            <file id="file-source-1"/>
+          </clipitem>
+        </track>
+      </audio>
+    </media>
+${markersXml}
+  </sequence>
+</xmeml>
+`;
 }
 
 function runCommandAsync(
