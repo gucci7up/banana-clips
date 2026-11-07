@@ -98,18 +98,39 @@ export default function AiClippingPage() {
       }
 
       const finalDuration = useCustomDuration ? customDuration : targetDurationSec;
-      const jobRes = await apiFetch<{ jobId: string; job: any }>('/jobs', {
+      const jobRes = await apiFetch<{ jobId: string }>('/jobs', {
         method: 'POST',
         body: JSON.stringify({
           videoId: videoIdToProcess,
           jobType: 'AI_CLIPPING',
           targetDurationSec: finalDuration,
           aspectRatio,
-          syncExecution: true,
+          syncExecution: false,
         }),
       });
 
-      setActiveJob(jobRes.job);
+      // Poll job progress every 2s so long YouTube/Facebook downloads never hit HTTP 30s proxy timeout
+      let currentJob: any = {
+        id: jobRes.jobId,
+        status: 'QUEUED',
+        currentPhase: 'Iniciando descarga y análisis...',
+        progressPercent: 5,
+      };
+      setActiveJob(currentJob);
+
+      while (true) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const statusRes = await apiFetch<{ job: any }>(`/jobs/${jobRes.jobId}`);
+        currentJob = statusRes.job;
+        setActiveJob(currentJob);
+        if (currentJob.status === 'COMPLETED') {
+          break;
+        }
+        if (currentJob.status === 'FAILED' || currentJob.status === 'CANCELED') {
+          throw new Error(currentJob.errorMessage || 'El trabajo falló o fue cancelado.');
+        }
+      }
+
       await loadData();
     } catch (err: any) {
       alert(err.message);

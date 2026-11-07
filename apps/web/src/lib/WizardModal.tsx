@@ -65,11 +65,22 @@ export function CreateClipsWizardModal() {
           targetDurationSec,
           aspectRatio,
           gameId,
-          syncExecution: true,
+          syncExecution: false,
         }),
       });
 
-      const detail = await apiFetch<{ job: any; clips: any[] }>(`/jobs/${jobRes.jobId}`);
+      let detail: { job: any; clips: any[] } = { job: null, clips: [] };
+      while (true) {
+        await new Promise((r) => setTimeout(r, 2000));
+        detail = await apiFetch<{ job: any; clips: any[] }>(`/jobs/${jobRes.jobId}`);
+        setProgressPhase(detail.job?.currentPhase || 'Procesando...');
+        setProgressPercent(detail.job?.progressPercent || 50);
+        if (detail.job?.status === 'COMPLETED') break;
+        if (detail.job?.status === 'FAILED' || detail.job?.status === 'CANCELED') {
+          throw new Error(detail.job?.errorMessage || 'Error en el procesamiento del video.');
+        }
+      }
+
       setProgressPercent(100);
       setProgressPhase('Completado');
       setGeneratedClips(detail.clips || []);

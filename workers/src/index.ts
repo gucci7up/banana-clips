@@ -6,6 +6,7 @@ import { calculateMultimodalClipScore, SUBTITLE_TEMPLATES } from '@banana/shared
 import type { AspectRatio, JobState, WordTimestamp } from '@banana/video-types';
 import {
   buildSrtAndVttFromWords,
+  downloadVideoFromExternalUrl,
   generateAssSubtitles,
   generateThumbnailFfmpeg,
   getStorageRoot,
@@ -190,7 +191,49 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       storageRes.rows[0]?.localPath ||
       path.join(storageRoot, storageRes.rows[0]?.bucket || 'banana-videos', storageRes.rows[0]?.objectKey || '');
 
+    // Check if this video is a URL import that needs asynchronous yt-dlp downloading first
+    const sourceRes = await db.query<{ sourceType: string; originUrl: string | null }>(
+      `SELECT "sourceType", "originUrl" FROM "VideoSource" WHERE "videoId" = $1 LIMIT 1`,
+      [video.id]
+    );
+    if (
+      sourceRes.rows[0]?.sourceType === 'URL' &&
+      sourceRes.rows[0]?.originUrl &&
+      (!fs.existsSync(videoFilePath) || fs.statSync(videoFilePath).size < 1000)
+    ) {
+      if (
+        !(await updateJobStatus(
+          db,
+          jobId,
+          'DOWNLOADING',
+          'Descargando video desde URL (YouTube / Facebook / Web) con yt-dlp...',
+          6
+        ))
+      ) {
+        return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
+      }
+
+      const dl = downloadVideoFromExternalUrl({
+        url: sourceRes.rows[0].originUrl,
+        outputPath: videoFilePath,
+      });
+
+      if (dl.downloadedTitle && (video.title === 'Video desde URL' || video.title.startsWith('http'))) {
+        await db.query(`UPDATE "Video" SET title = $1 WHERE id = $2`, [dl.downloadedTitle, video.id]);
+        video.title = dl.downloadedTitle;
+      }
+    }
+
+    if (!(await updateJobStatus(db, jobId, 'PROBING', 'Importando video y verificando con FFprobe', 14))) {
+      return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
+    }
+
     const probeMeta = probeMediaWithFfprobe(videoFilePath);
+    await db.query(`UPDATE "StorageObject" SET "sizeBytes" = $1 WHERE id = $2`, [
+      probeMeta.fileSizeBytes,
+      video.storageObjectId,
+    ]);
+    await db.query(`UPDATE "Video" SET status = 'READY' WHERE id = $1`, [video.id]);
 
     // Save or update VideoMetadata
     const existingMeta = await db.query(`SELECT id FROM "VideoMetadata" WHERE "videoId" = $1`, [video.id]);

@@ -920,34 +920,27 @@ export async function createBananaApiApp(): Promise<Express> {
       });
     }
 
-    // Download real video from YouTube, Facebook, Twitch, Kick or direct MP4 URL via yt-dlp
+    // Register URL import immediately (HTTP < 100ms) so Next.js proxy and Cloudflare never time out.
+    // The worker downloads the full video asynchronously during the DOWNLOADING phase.
     const videoId = crypto.randomUUID();
     const objectKey = `url_import_${videoId}.mp4`;
     const finalPath = path.join(storageRoot, 'banana-videos', objectKey);
-    const dlResult = downloadVideoFromExternalUrl({
-      url: validation.normalizedUrl!,
-      outputPath: finalPath,
-    });
     const resolvedTitle =
-      req.body?.title && req.body.title !== 'Video desde URL autorizada'
+      req.body?.title && String(req.body.title).trim().length > 0
         ? String(req.body.title).trim()
-        : dlResult.downloadedTitle || title;
-    const meta = probeMediaWithFfprobe(finalPath);
+        : 'Video desde URL';
 
     const storageObjectId = crypto.randomUUID();
     await db.query(
       `INSERT INTO "StorageObject" ("id", "userId", "bucket", "objectKey", "localPath", "mimeType", "sizeBytes")
-       VALUES ($1, $2, 'banana-videos', $3, $4, 'video/mp4', $5)`,
-      [storageObjectId, req.user!.sub, objectKey, finalPath, meta.fileSizeBytes]
+       VALUES ($1, $2, 'banana-videos', $3, $4, 'video/mp4', 0)`,
+      [storageObjectId, req.user!.sub, objectKey, finalPath]
     );
 
-    const thumbRel = `banana-thumbnails/video_${videoId}.jpg`;
-    generateThumbnailFfmpeg(finalPath, path.join(storageRoot, thumbRel), Math.min(1.0, meta.durationSeconds / 3));
-
     await db.query(
-      `INSERT INTO "Video" ("id", "userId", "title", "originalFilename", "storageObjectId", "thumbnailPath", "status")
-       VALUES ($1, $2, $3, $4, $5, $6, 'READY')`,
-      [videoId, req.user!.sub, resolvedTitle, objectKey, storageObjectId, thumbRel]
+      `INSERT INTO "Video" ("id", "userId", "title", "originalFilename", "storageObjectId", "status")
+       VALUES ($1, $2, $3, $4, $5, 'DOWNLOADING')`,
+      [videoId, req.user!.sub, resolvedTitle, objectKey, storageObjectId]
     );
 
     await db.query(
@@ -956,32 +949,13 @@ export async function createBananaApiApp(): Promise<Express> {
       [crypto.randomUUID(), videoId, validation.normalizedUrl]
     );
 
-    await db.query(
-      `INSERT INTO "VideoMetadata" ("id", "videoId", "durationSeconds", "width", "height", "fps", "videoCodec", "audioCodec", "bitrateKbps", "fileSizeBytes", "aspectRatio", "hasAudio")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [
-        crypto.randomUUID(),
-        videoId,
-        meta.durationSeconds,
-        meta.width,
-        meta.height,
-        meta.fps,
-        meta.videoCodec,
-        meta.audioCodec,
-        meta.bitrateKbps,
-        meta.fileSizeBytes,
-        meta.aspectRatio,
-        meta.hasAudio,
-      ]
-    );
-
     return res.status(201).json({
       video: {
         id: videoId,
         title: resolvedTitle,
         originUrl: validation.normalizedUrl,
         storageObjectId,
-        metadata: meta,
+        status: 'DOWNLOADING',
       },
     });
   });
