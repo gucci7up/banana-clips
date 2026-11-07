@@ -224,7 +224,7 @@ export default function DashboardPage() {
         <div className="space-y-6">
           <div className="rounded-2xl border border-slate-800 bg-[#1B1E25] p-5">
             <h2 className="mb-3 flex items-center gap-2 text-base font-bold">
-              <Cpu className="h-4 w-4 text-[#FFD43B]" /> Actividad de Workers (Dokploy)
+              <Cpu className="h-4 w-4 text-[#FFD43B]" /> Actividad de Workers y Hardware
             </h2>
             <div className="space-y-2.5">
               {(data?.workers || []).map((w: any) => (

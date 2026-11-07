@@ -198,12 +198,42 @@ export async function runIdempotentBootstrap(db: DatabaseEngine): Promise<{
     }
   }
 
-  // 6. Seed Default Processing Workers registration
+  // 6. Seed & Sync Real Host Hardware & Processing Workers
+  const os = require('os') as typeof import('os');
+  const { execSync } = require('child_process') as typeof import('child_process');
+  const totalRamMb = Math.round(os.totalmem() / (1024 * 1024));
+  const usedRamMb = Math.round((os.totalmem() - os.freemem()) / (1024 * 1024));
+  const cpuModel = (os.cpus()?.[0]?.model || 'Intel Core i5 12th Gen').trim();
+
+  let detectedGpu = process.env.HOST_GPU_NAME || 'NVIDIA T400';
+  let detectedVramTotal = Number(process.env.HOST_VRAM_TOTAL_MB || 4096);
+  let detectedVramUsed = Number(process.env.HOST_VRAM_USED_MB || 412);
+  try {
+    const smi = execSync('nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv,noheader,nounits', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2000,
+    }).trim();
+    if (smi) {
+      const parts = smi.split('\n')[0].split(',').map((s) => s.trim());
+      if (parts.length >= 3) {
+        detectedGpu = parts[0];
+        detectedVramTotal = Math.round(Number(parts[1]));
+        detectedVramUsed = Math.round(Number(parts[2]));
+      }
+    }
+  } catch {
+    // Fallback to configured server hardware profile (NVIDIA T400 4GB + i5 12th Gen + 32GB RAM)
+  }
+
+  const hwProfile = detectedVramTotal >= 11000 ? 'NVIDIA_HIGH_VRAM' : 'NVIDIA_LOW_VRAM';
+  const gpuLabel = `${detectedGpu} • ${cpuModel} (${Math.round(totalRamMb / 1024)}GB RAM)`;
+
   const defaultWorkers = [
-    { workerName: 'worker-ingest-01', queueName: 'worker-ingest', hardwareProfile: 'CPU_ONLY' },
-    { workerName: 'worker-transcribe-01', queueName: 'worker-transcribe', hardwareProfile: 'NVIDIA_LOW_VRAM', gpuName: 'NVIDIA GeForce GTX 1070', vramTotalMb: 8192, vramUsedMb: 1116 },
-    { workerName: 'worker-analyze-01', queueName: 'worker-analyze', hardwareProfile: 'NVIDIA_LOW_VRAM', gpuName: 'NVIDIA GeForce GTX 1070', vramTotalMb: 8192, vramUsedMb: 1116 },
-    { workerName: 'worker-render-01', queueName: 'worker-render', hardwareProfile: 'NVIDIA_LOW_VRAM', gpuName: 'NVIDIA GeForce GTX 1070', vramTotalMb: 8192, vramUsedMb: 1116 },
+    { workerName: 'worker-ingest-01', queueName: 'worker-ingest', hardwareProfile: 'CPU_ONLY', gpuName: `${cpuModel} (${Math.round(totalRamMb / 1024)}GB RAM)`, vramTotalMb: null, vramUsedMb: null },
+    { workerName: 'worker-transcribe-01', queueName: 'worker-transcribe', hardwareProfile: hwProfile, gpuName: gpuLabel, vramTotalMb: detectedVramTotal, vramUsedMb: detectedVramUsed },
+    { workerName: 'worker-analyze-01', queueName: 'worker-analyze', hardwareProfile: hwProfile, gpuName: gpuLabel, vramTotalMb: detectedVramTotal, vramUsedMb: detectedVramUsed },
+    { workerName: 'worker-render-01', queueName: 'worker-render', hardwareProfile: hwProfile, gpuName: gpuLabel, vramTotalMb: detectedVramTotal, vramUsedMb: detectedVramUsed },
   ];
 
   for (const w of defaultWorkers) {
@@ -211,8 +241,15 @@ export async function runIdempotentBootstrap(db: DatabaseEngine): Promise<{
     if (exists.rows.length === 0) {
       await db.query(
         `INSERT INTO "ProcessingWorker" ("id", "workerName", "queueName", "status", "hardwareProfile", "gpuName", "vramTotalMb", "vramUsedMb", "cpuLoadPercent", "ramUsedMb")
-         VALUES ($1, $2, $3, 'ONLINE', $4, $5, $6, $7, 12.5, 640)`,
-        [crypto.randomUUID(), w.workerName, w.queueName, w.hardwareProfile, w.gpuName || null, w.vramTotalMb || null, w.vramUsedMb || null]
+         VALUES ($1, $2, $3, 'ONLINE', $4, $5, $6, $7, 8.4, $8)`,
+        [crypto.randomUUID(), w.workerName, w.queueName, w.hardwareProfile, w.gpuName || null, w.vramTotalMb || null, w.vramUsedMb || null, usedRamMb]
+      );
+    } else {
+      await db.query(
+        `UPDATE "ProcessingWorker"
+         SET "hardwareProfile" = $1, "gpuName" = $2, "vramTotalMb" = $3, "vramUsedMb" = $4, "ramUsedMb" = $5, "lastHeartbeatAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+         WHERE "workerName" = $6`,
+        [w.hardwareProfile, w.gpuName || null, w.vramTotalMb || null, w.vramUsedMb || null, usedRamMb, w.workerName]
       );
     }
   }

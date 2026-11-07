@@ -11,7 +11,7 @@ export default function AdminWorkersPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-extrabold">Workers Administrados en Dokploy</h1>
+      <h1 className="text-2xl font-extrabold">Workers de Procesamiento y Hardware del Servidor</h1>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {workers.map((w) => (
           <div key={w.id} className="rounded-2xl border border-slate-800 bg-[#1B1E25] p-5 text-xs space-y-2">
