@@ -552,7 +552,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     );
   }
 
-  // 2. Persistent Brand Kit Watermark (@Handle / Brand)
+  // 2. Persistent Brand Kit Watermark (@Handle / Brand) - only when explicitly configured
   const totalClipSec =
     proOptions?.clipDurationSec || (words.length > 0 ? Math.max(10, words[words.length - 1].end) : 30);
   if (proOptions?.brandWatermarkText) {
@@ -562,20 +562,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     );
   }
 
-  // 2b. Motion Graphics Lower-Third / Progress Indicator if enabled
-  if (proOptions?.motionGraphics) {
-    const stepSec = Math.max(1, totalClipSec / 5);
-    for (let p = 0; p < 5; p++) {
-      const pStart = p * stepSec;
-      const pEnd = Math.min(totalClipSec, (p + 1) * stepSec);
-      const bar = '▰'.repeat(p + 1) + '▱'.repeat(5 - (p + 1));
-      events.push(
-        `Dialogue: 1,${formatAssTime(pStart)},${formatAssTime(pEnd)},MotionGraphic,,0,0,0,, ${bar} AI HIGHLIGHT `
-      );
-    }
-  }
-
-  // 3. Final Call-To-Action (CTA) Outro Banner (Last 2.8 seconds)
+  // 3. Final Call-To-Action (CTA) Outro Banner (Last 2.8 seconds) - only when explicitly enabled
   if (proOptions?.ctaOutroText && totalClipSec >= 6) {
     const ctaStart = Math.max(3.8, totalClipSec - 2.8);
     const cleanCta = proOptions.ctaOutroText.replace(/[{}]/g, '').toUpperCase().slice(0, 54);
@@ -633,9 +620,17 @@ export type VideoEffectPreset =
   | 'DYNAMIC_ZOOM'
   | 'FADE_TRANSITIONS';
 
+export type WatermarkPosition =
+  | 'TOP_RIGHT'
+  | 'TOP_LEFT'
+  | 'BOTTOM_RIGHT'
+  | 'BOTTOM_LEFT'
+  | 'BOTTOM_CENTER';
+
 /**
  * Renders a real playable MP4 (H.264 + AAC) clip using FFmpeg with Auto-Reframe (9:16, 1:1, 4:5, 16:9),
  * burned-in ASS animated karaoke subtitles + Hook Banner + Brand Kit via libass,
+ * Motion Graphics custom Image/Logo Watermark Overlay (PNG/JPG/WEBP),
  * OpusClip AI B-Roll Cutaway / Auto Zoom / Auto Transitions / Auto Color Correction, and AI Studio Audio Enhancer DSP.
  */
 export function renderClipWithFfmpeg(params: {
@@ -659,6 +654,9 @@ export function renderClipWithFfmpeg(params: {
   autoTransitions?: boolean;
   autoColorCorrection?: boolean;
   autoSfx?: boolean;
+  watermarkImagePath?: string;
+  watermarkPosition?: WatermarkPosition;
+  watermarkScalePx?: number;
 }): MediaProbeResult {
   fs.mkdirSync(path.dirname(params.outputVideoPath), { recursive: true });
 
@@ -764,6 +762,8 @@ export function renderClipWithFfmpeg(params: {
     afParts.push(`atempo=${params.speed.toFixed(2)}`);
   }
 
+  const hasWatermarkImage = Boolean(params.watermarkImagePath && fs.existsSync(params.watermarkImagePath));
+
   // Place -ss BEFORE -i for fast seek, and -t AFTER -i so output clip duration is strictly enforced!
   const args: string[] = [
     '-y',
@@ -771,11 +771,23 @@ export function renderClipWithFfmpeg(params: {
     String(Math.max(0, params.startSec)),
     '-i',
     params.sourceVideoPath,
-    '-t',
-    String(clipDur),
-    '-vf',
-    vfParts.join(','),
   ];
+
+  if (hasWatermarkImage && params.watermarkImagePath) {
+    args.push('-i', params.watermarkImagePath);
+    const wmWidth = Math.max(48, Math.min(420, Number(params.watermarkScalePx) || 140));
+    const pos = params.watermarkPosition || 'TOP_RIGHT';
+    let overlayCoords = 'W-w-32:36';
+    if (pos === 'TOP_LEFT') overlayCoords = '32:36';
+    else if (pos === 'BOTTOM_RIGHT') overlayCoords = 'W-w-32:H-h-64';
+    else if (pos === 'BOTTOM_LEFT') overlayCoords = '32:H-h-64';
+    else if (pos === 'BOTTOM_CENTER') overlayCoords = '(W-w)/2:H-h-48';
+
+    const filterComplex = `[0:v]${vfParts.join(',')}[base];[1:v]scale=${wmWidth}:-1[wm];[base][wm]overlay=${overlayCoords}[vout]`;
+    args.push('-t', String(clipDur), '-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?');
+  } else {
+    args.push('-t', String(clipDur), '-vf', vfParts.join(','));
+  }
 
   if (afParts.length > 0) {
     args.push('-af', afParts.join(','));

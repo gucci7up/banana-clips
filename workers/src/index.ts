@@ -15,6 +15,7 @@ import {
   renderClipWithFfmpeg,
   translateTextToTargetLang,
   type VideoEffectPreset,
+  type WatermarkPosition,
 } from './pipeline-engine';
 
 export interface JobProgressUpdate {
@@ -292,9 +293,13 @@ export async function executeAiClippingJob(jobId: string): Promise<{
     const hookBanner: boolean = config.hookBanner !== false;
     const hookStyle: 'Classic' | 'Statement' | 'Editorial' = config.hookStyle || 'Classic';
     const motionGraphics: boolean = Boolean(config.motionGraphics);
+    const watermarkImagePath: string = config.watermarkImagePath ? String(config.watermarkImagePath) : '';
+    const watermarkPosition: WatermarkPosition =
+      (config.watermarkPosition as WatermarkPosition) || 'TOP_RIGHT';
+    const watermarkScalePx: number = Number(config.watermarkScalePx || 140);
     const brandWatermarkText: string =
-      config.brandWatermarkText !== undefined ? String(config.brandWatermarkText) : '@BananaClips';
-    const ctaOutro: boolean = config.ctaOutro !== false;
+      config.brandWatermarkText !== undefined ? String(config.brandWatermarkText) : '';
+    const ctaOutro: boolean = Boolean(config.ctaOutro);
     const ctaOutroText: string =
       config.ctaOutroText !== undefined ? String(config.ctaOutroText) : 'SÍGUENOS Y COMPARTE PARA MÁS';
     const autoBroll: boolean = config.autoBroll !== undefined ? Boolean(config.autoBroll) : true;
@@ -739,6 +744,9 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         autoTransitions,
         autoColorCorrection,
         autoSfx,
+        watermarkImagePath: motionGraphics && watermarkImagePath ? watermarkImagePath : undefined,
+        watermarkPosition,
+        watermarkScalePx,
       });
 
       // Capture viral thumbnail at 1.2s so the burned-in Hook Banner + Subtitles appear on the cover

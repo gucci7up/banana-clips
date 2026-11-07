@@ -894,6 +894,64 @@ export async function createBananaApiApp(): Promise<Express> {
     }
   });
 
+  // Upload custom Watermark Image / Logo (PNG, JPG, WEBP) for Motion Graphics
+  router.post('/uploads/watermark', requireAuth, upload.single('file'), async (req: AuthenticatedRequest, res) => {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'FILE_REQUIRED', message: 'Debes adjuntar una imagen PNG, JPG o WEBP.' });
+    }
+    try {
+      const ext = path.extname(file.originalname || '.png').toLowerCase();
+      if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
+        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+        return res.status(400).json({
+          error: 'INVALID_IMAGE_FORMAT',
+          message: 'Solo se permiten imágenes en formato PNG, JPG o WEBP para la marca de agua.',
+        });
+      }
+
+      const wmId = crypto.randomUUID();
+      const objectKey = `watermark_${wmId}${ext}`;
+      const wmDir = path.join(storageRoot, 'banana-models');
+      fs.mkdirSync(wmDir, { recursive: true });
+      const finalPath = path.join(wmDir, objectKey);
+      fs.renameSync(file.path, finalPath);
+
+      const storageObjectId = crypto.randomUUID();
+      const mimeMap: Record<string, string> = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.webp': 'image/webp',
+      };
+      await db.query(
+        `INSERT INTO "StorageObject" ("id", "userId", "bucket", "objectKey", "localPath", "mimeType", "sizeBytes")
+         VALUES ($1, $2, 'banana-models', $3, $4, $5, $6)`,
+        [storageObjectId, req.user!.sub, objectKey, finalPath, mimeMap[ext] || 'image/png', file.size]
+      );
+
+      const signed = signStorageObjectUrl({ storageObjectId, userId: req.user!.sub });
+      return res.status(201).json({
+        watermark: {
+          id: wmId,
+          filename: file.originalname,
+          watermarkImagePath: finalPath,
+          previewUrl: signed.url,
+        },
+      });
+    } catch (err: any) {
+      if (file && fs.existsSync(file.path)) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch {}
+      }
+      return res.status(400).json({
+        error: 'WATERMARK_UPLOAD_FAILED',
+        message: err?.message || 'Error al subir la imagen de marca de agua.',
+      });
+    }
+  });
+
   // Import from URL with SSRF Protection
   router.post('/uploads/from-url', requireAuth, async (req: AuthenticatedRequest, res) => {
     const rawUrl = String(req.body?.url || '').trim();
@@ -1100,8 +1158,8 @@ export async function createBananaApiApp(): Promise<Express> {
       videoEffect = 'AI_BROLL_CUTAWAY',
       autoEmojis = true,
       hookBanner = true,
-      brandWatermarkText = '@BananaClips',
-      ctaOutro = true,
+      brandWatermarkText = '',
+      ctaOutro = false,
       ctaOutroText = 'SÍGUENOS Y COMPARTE PARA MÁS',
       audioEnhancer = true,
       trimSilences = false,

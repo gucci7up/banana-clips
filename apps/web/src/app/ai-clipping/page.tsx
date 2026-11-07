@@ -143,8 +143,8 @@ export default function AiClippingPage() {
 
   // Recipe & Brand Kit
   const [recipe, setRecipe] = useState('Clip long video');
-  const [brandKitMode, setBrandKitMode] = useState('@BananaClips');
-  const [brandWatermarkText, setBrandWatermarkText] = useState('@BananaClips');
+  const [brandKitMode, setBrandKitMode] = useState('NONE');
+  const [brandWatermarkText, setBrandWatermarkText] = useState('');
 
   // Clipping section
   const [clippingEnabled, setClippingEnabled] = useState(true);
@@ -152,7 +152,7 @@ export default function AiClippingPage() {
   const [targetDurationSec, setTargetDurationSec] = useState<number>(30);
   const [momentsPrompt, setMomentsPrompt] = useState('');
 
-  // Essentials: Captions, Auto Hook, Motion Graphics, AI Emojis, Auto B-Roll
+  // Essentials: Captions, Auto Hook, Motion Graphics (Image Watermark), AI Emojis, Auto B-Roll
   const [burnSubtitles, setBurnSubtitles] = useState<boolean>(true);
   const [captionPresetId, setCaptionPresetId] = useState<string>('WordCut');
   const [subtitleTemplate, setSubtitleTemplate] = useState<string>('Bold');
@@ -161,7 +161,13 @@ export default function AiClippingPage() {
   const [hookType, setHookType] = useState<string>('Headline');
   const [hookStyle, setHookStyle] = useState<'Editorial' | 'Statement' | 'Classic'>('Classic');
 
-  const [motionGraphics, setMotionGraphics] = useState<boolean>(true);
+  const [motionGraphics, setMotionGraphics] = useState<boolean>(false);
+  const [watermarkImagePath, setWatermarkImagePath] = useState<string>('');
+  const [watermarkPreviewUrl, setWatermarkPreviewUrl] = useState<string>('');
+  const [watermarkFileName, setWatermarkFileName] = useState<string>('');
+  const [watermarkPosition, setWatermarkPosition] = useState<string>('TOP_RIGHT');
+  const [watermarkScalePx, setWatermarkScalePx] = useState<number>(140);
+  const [uploadingWatermark, setUploadingWatermark] = useState<boolean>(false);
   const [autoEmojis, setAutoEmojis] = useState<boolean>(true);
   const [autoBroll, setAutoBroll] = useState<boolean>(true);
   const [brollMode, setBrollMode] = useState<string>('AI video B-roll');
@@ -176,7 +182,7 @@ export default function AiClippingPage() {
   const [autoZoom, setAutoZoom] = useState<boolean>(true);
   const [autoTransitions, setAutoTransitions] = useState<boolean>(true);
   const [autoColorCorrection, setAutoColorCorrection] = useState<boolean>(true);
-  const [ctaOutro, setCtaOutro] = useState<boolean>(true);
+  const [ctaOutro, setCtaOutro] = useState<boolean>(false);
 
   // Translate: Voice dubbing & Caption translation
   const [voiceDubbing, setVoiceDubbing] = useState<boolean>(false);
@@ -217,6 +223,28 @@ export default function AiClippingPage() {
   };
 
   const selectedVideoObj = videos.find((v) => v.id === selectedVideoId) || videos[0] || null;
+
+  const handleWatermarkFileUpload = async (file: File) => {
+    setUploadingWatermark(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await apiFetch<{
+        watermark: { id: string; filename: string; watermarkImagePath: string; previewUrl: string };
+      }>('/uploads/watermark', {
+        method: 'POST',
+        body: fd,
+      });
+      setWatermarkImagePath(res.watermark.watermarkImagePath);
+      setWatermarkPreviewUrl(res.watermark.previewUrl);
+      setWatermarkFileName(res.watermark.filename);
+      setMotionGraphics(true);
+    } catch (err: any) {
+      alert(err.message || 'Error al subir la imagen de marca de agua.');
+    } finally {
+      setUploadingWatermark(false);
+    }
+  };
 
   const handleUploadAndAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -275,6 +303,9 @@ export default function AiClippingPage() {
           hookBanner,
           hookStyle,
           motionGraphics,
+          watermarkImagePath: motionGraphics ? watermarkImagePath : '',
+          watermarkPosition,
+          watermarkScalePx,
           autoEmojis,
           autoBroll,
           brollMode,
@@ -884,19 +915,121 @@ export default function AiClippingPage() {
                 )}
               </div>
 
-              {/* Motion graphics */}
-              <div className="flex items-center justify-between pt-1">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#27272D] text-zinc-300">
-                    <Layers className="h-4 w-4" />
+              {/* Motion graphics (Custom Image / Logo Watermark Overlay) */}
+              <div className="space-y-3 pt-1">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#27272D] text-zinc-300">
+                      <Layers className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-white">Motion graphics</span>
+                        <span className="text-xs text-[#FFD43B]">👑</span>
+                        <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
+                          Marca de Agua / Logo
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-zinc-400">
+                        Sube una imagen PNG, JPG o WEBP para incrustarla como marca de agua en tus clips
+                      </span>
+                    </div>
                   </div>
-                  <span className="text-sm font-bold text-white">Motion graphics</span>
-                  <span className="text-xs text-[#FFD43B]">👑</span>
-                  <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
-                    Beta
-                  </span>
+                  <OpusSwitch checked={motionGraphics} onChange={setMotionGraphics} />
                 </div>
-                <OpusSwitch checked={motionGraphics} onChange={setMotionGraphics} />
+
+                {motionGraphics && (
+                  <div className="rounded-2xl border border-zinc-800 bg-[#222227] p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-[#FFD43B] px-3.5 py-2 text-xs font-extrabold text-[#111318] transition hover:bg-amber-300">
+                        {uploadingWatermark ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" /> Subiendo imagen...
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="h-4 w-4" /> Subir Imagen / Logo (PNG, JPG, WEBP)
+                          </>
+                        )}
+                        <input
+                          type="file"
+                          accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleWatermarkFileUpload(f);
+                          }}
+                        />
+                      </label>
+
+                      {watermarkFileName ? (
+                        <div className="flex items-center gap-2.5 rounded-xl border border-zinc-700 bg-[#18181B] px-3 py-1.5">
+                          {watermarkPreviewUrl && (
+                            <img
+                              src={watermarkPreviewUrl}
+                              alt="Marca de agua"
+                              className="h-7 w-7 rounded object-contain bg-zinc-900"
+                            />
+                          )}
+                          <span className="text-xs font-semibold text-emerald-400">
+                            ✓ {watermarkFileName}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setWatermarkImagePath('');
+                              setWatermarkPreviewUrl('');
+                              setWatermarkFileName('');
+                            }}
+                            className="text-zinc-400 hover:text-red-400"
+                            title="Quitar imagen"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-zinc-400">
+                          Ninguna imagen seleccionada todavía (recomendado: PNG transparente)
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-zinc-400">
+                          Posición de la marca de agua
+                        </label>
+                        <select
+                          value={watermarkPosition}
+                          onChange={(e) => setWatermarkPosition(e.target.value)}
+                          className="w-full rounded-xl border border-zinc-700 bg-[#18181B] px-3 py-2 text-xs font-semibold text-white focus:outline-none"
+                        >
+                          <option value="TOP_RIGHT">Arriba a la derecha</option>
+                          <option value="TOP_LEFT">Arriba a la izquierda</option>
+                          <option value="BOTTOM_RIGHT">Abajo a la derecha</option>
+                          <option value="BOTTOM_LEFT">Abajo a la izquierda</option>
+                          <option value="BOTTOM_CENTER">Abajo al centro</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold text-zinc-400">
+                          Tamaño del logo en el video
+                        </label>
+                        <select
+                          value={watermarkScalePx}
+                          onChange={(e) => setWatermarkScalePx(Number(e.target.value))}
+                          className="w-full rounded-xl border border-zinc-700 bg-[#18181B] px-3 py-2 text-xs font-semibold text-white focus:outline-none"
+                        >
+                          <option value={95}>Pequeño (Discreto - 95px)</option>
+                          <option value={140}>Mediano (Estándar - 140px)</option>
+                          <option value={200}>Grande (Destacado - 200px)</option>
+                          <option value={260}>Extra Grande (Banner - 260px)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* AI Emojis */}
