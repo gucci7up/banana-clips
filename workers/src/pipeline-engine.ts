@@ -552,17 +552,11 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       '--no-warnings',
       '--no-check-certificates',
       '--socket-timeout',
-      '12',
+      '15',
       '--retries',
       '2',
       '--max-filesize',
       '180M',
-      '--write-auto-subs',
-      '--write-subs',
-      '--sub-langs',
-      'es.*,en.*',
-      '--sub-format',
-      'vtt',
       '-f',
       '18/22/best[height<=720][ext=mp4]/best[height<=720]/best',
       '--merge-output-format',
@@ -572,8 +566,30 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       params.url,
     ];
 
-    const dlProc = await runCommandAsync('yt-dlp', dlArgs, 45000);
-    if (dlProc.status === 0 && fs.existsSync(params.outputPath) && fs.statSync(params.outputPath).size > 1000) {
+    await runCommandAsync('yt-dlp', dlArgs, 60000);
+    if (fs.existsSync(params.outputPath) && fs.statSync(params.outputPath).size > 10000) {
+      // Optional non-blocking pass to fetch VTT captions if available without affecting the video file
+      try {
+        await runCommandAsync(
+          'yt-dlp',
+          [
+            '--no-playlist',
+            '--no-warnings',
+            '--ignore-errors',
+            '--skip-download',
+            '--write-auto-subs',
+            '--write-subs',
+            '--sub-langs',
+            'es.*,en.*',
+            '--sub-format',
+            'vtt',
+            '-o',
+            params.outputPath,
+            params.url,
+          ],
+          15000
+        );
+      } catch {}
       return { downloadedTitle, filePath: params.outputPath };
     }
   } catch {}
