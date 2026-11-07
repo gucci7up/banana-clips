@@ -109,9 +109,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen bg-[#111318] text-[#F8FAFC]">
       {/* Professional Sidebar */}
       <aside className="flex w-64 flex-col border-r border-slate-800/80 bg-[#1B1E25]">
-        <div className="flex items-center gap-3 border-b border-slate-800 px-5 py-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#FFD43B] to-[#FFB703] font-black text-[#111318] shadow">
-            <Scissors className="h-5 w-5" />
+        <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-3.5">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[#FFD43B]/40 bg-white p-1 shadow">
+            <img
+              src="/banana-clips-logo.jpg"
+              alt="Banana Clips Logo"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div>
             <div className="text-sm font-extrabold tracking-wide text-[#FFD43B]">BANANA CLIPS</div>

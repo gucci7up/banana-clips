@@ -3,13 +3,27 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch, useStudioStore } from '@/lib/store';
-import { Scissors, Lock, ShieldAlert, ArrowRight } from 'lucide-react';
+import {
+  Lock,
+  ShieldAlert,
+  ArrowRight,
+  Sparkles,
+  Film,
+  Subtitles,
+  Cpu,
+  User,
+  KeyRound,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+} from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
   const { setAuth } = useStudioStore();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -36,72 +50,158 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-[#111318] p-4 text-[#F8FAFC]">
-      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-[#1B1E25] p-8 shadow-2xl">
-        <div className="mb-6 flex flex-col items-center text-center">
-          <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#FFD43B] to-[#FFB703] text-[#111318] shadow-lg">
-            <Scissors className="h-7 w-7" />
+    <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-[#0A0B0E] p-4 text-[#F8FAFC] sm:p-6 lg:p-10">
+      {/* Ambient Animated Background Glows */}
+      <div className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-[#FFD43B]/15 blur-[130px]" />
+      <div className="pointer-events-none absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-amber-500/15 blur-[130px]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,212,59,0.06),transparent_60%)]" />
+
+      <div className="relative z-10 grid w-full max-w-5xl grid-cols-1 overflow-hidden rounded-3xl border border-zinc-800/80 bg-[#121318]/90 shadow-[0_25px_80px_-15px_rgba(0,0,0,0.85)] backdrop-blur-xl lg:grid-cols-12">
+        {/* LEFT SHOWCASE PANEL (7 cols on desktop) */}
+        <div className="relative flex flex-col justify-between border-b border-zinc-800/70 bg-gradient-to-br from-[#16181F] via-[#121318] to-[#1A160B] p-8 sm:p-10 lg:col-span-7 lg:border-b-0 lg:border-r">
+          <div>
+            {/* Top Status Badge */}
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#FFD43B]/30 bg-[#FFD43B]/10 px-3.5 py-1 text-xs font-bold text-[#FFD43B]">
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>AI VIDEO CLIPPING STUDIO • SELF-HOSTED</span>
+            </div>
+
+            {/* Official Banana Clips Logo */}
+            <div className="my-7 flex items-center justify-center lg:justify-start">
+              <div className="overflow-hidden rounded-3xl border-2 border-[#FFD43B]/40 bg-white p-3 shadow-[0_12px_40px_-10px_rgba(255,212,59,0.35)] transition-transform duration-300 hover:scale-[1.02]">
+                <img
+                  src="/banana-clips-logo.jpg"
+                  alt="Banana Clips Logo"
+                  className="h-36 w-auto object-contain sm:h-44"
+                />
+              </div>
+            </div>
+
+            <h1 className="text-2xl font-black tracking-tight text-white sm:text-3xl">
+              Convierte videos largos en{' '}
+              <span className="bg-gradient-to-r from-[#FFD43B] via-amber-300 to-[#FFB703] bg-clip-text text-transparent">
+                clips virales con IA
+              </span>
+            </h1>
+            <p className="mt-2.5 text-sm leading-relaxed text-zinc-400">
+              Suite privada de recorte inteligente, reencuadre vertical 9:16 automático, subtítulos animados palabra por palabra con Faster-Whisper y edición no destructiva acelerada por GPU.
+            </p>
           </div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-[#FFD43B]">BANANA CLIPS AI STUDIO</h1>
-          <p className="mt-1 text-xs text-[#94A3B8]">
-            Plataforma privada de clipping e inteligencia artificial multimedia
-          </p>
+
+          {/* Feature Highlights */}
+          <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-zinc-800/90 bg-[#181A20]/90 p-3.5">
+              <Film className="mb-1.5 h-4 w-4 text-[#FFD43B]" />
+              <div className="text-xs font-bold text-white">Auto Reframe 9:16</div>
+              <div className="mt-0.5 text-[11px] text-zinc-400">TikTok, Reels y YouTube Shorts</div>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-800/90 bg-[#181A20]/90 p-3.5">
+              <Subtitles className="mb-1.5 h-4 w-4 text-[#FFD43B]" />
+              <div className="text-xs font-bold text-white">Subtítulos IA</div>
+              <div className="mt-0.5 text-[11px] text-zinc-400">Karaoke ASS + Marca de agua</div>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-800/90 bg-[#181A20]/90 p-3.5">
+              <Cpu className="mb-1.5 h-4 w-4 text-[#FFD43B]" />
+              <div className="text-xs font-bold text-white">Motor Privado</div>
+              <div className="mt-0.5 text-[11px] text-zinc-400">0 créditos • 100% Ilimitado</div>
+            </div>
+          </div>
+
+          <div className="mt-6 flex items-center justify-between border-t border-zinc-800/70 pt-4 text-[11px] text-zinc-500">
+            <span className="flex items-center gap-1.5 text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Workers & FFmpeg Pipeline Online
+            </span>
+            <span>Banana Clips v2.5 Pro</span>
+          </div>
         </div>
 
-        <div className="mb-6 flex items-center gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-          <Lock className="h-4 w-4 shrink-0 text-[#FFD43B]" />
-          <span>Acceso exclusivo para cuentas autorizadas por el propietario (Sin registro público).</span>
+        {/* RIGHT LOGIN FORM PANEL (5 cols on desktop) */}
+        <div className="flex flex-col justify-center bg-[#14161D] p-8 sm:p-10 lg:col-span-5">
+          <div className="mb-6">
+            <h2 className="text-xl font-extrabold text-white">Bienvenido de nuevo</h2>
+            <p className="mt-1 text-xs text-zinc-400">
+              Ingresa tus credenciales para acceder al estudio de producción
+            </p>
+          </div>
+
+          <div className="mb-6 flex items-center gap-2.5 rounded-2xl border border-[#FFD43B]/25 bg-[#FFD43B]/10 p-3.5 text-xs text-amber-200/90">
+            <Lock className="h-4 w-4 shrink-0 text-[#FFD43B]" />
+            <span>Acceso privado exclusivo para cuentas autorizadas (Sin registro público).</span>
+          </div>
+
+          {errorMsg && (
+            <div
+              data-testid="login-error"
+              className="mb-5 flex items-center gap-2.5 rounded-2xl border border-red-500/40 bg-red-500/10 p-3.5 text-xs font-medium text-red-300"
+            >
+              <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-zinc-400">
+                Usuario o Correo
+              </label>
+              <div className="relative">
+                <User className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                <input
+                  type="text"
+                  required
+                  data-testid="login-identifier"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  placeholder="Tu usuario o correo electrónico"
+                  className="w-full rounded-2xl border border-zinc-800 bg-[#0D0E12] py-3 pl-10 pr-4 text-sm text-white placeholder-zinc-600 transition focus:border-[#FFD43B] focus:outline-none focus:ring-2 focus:ring-[#FFD43B]/20"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-zinc-400">
+                Contraseña
+              </label>
+              <div className="relative">
+                <KeyRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  data-testid="login-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="w-full rounded-2xl border border-zinc-800 bg-[#0D0E12] py-3 pl-10 pr-11 text-sm text-white placeholder-zinc-600 transition focus:border-[#FFD43B] focus:outline-none focus:ring-2 focus:ring-[#FFD43B]/20"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  tabIndex={-1}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  aria-label="Mostrar u ocultar contraseña"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              data-testid="login-submit"
+              className="group mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[#FFD43B] to-[#FFB703] px-5 py-3.5 text-sm font-black text-[#111318] shadow-[0_10px_25px_-5px_rgba(255,212,59,0.4)] transition-all hover:brightness-105 disabled:opacity-50"
+            >
+              <span>{loading ? 'Verificando acceso...' : 'Entrar a Banana Clips'}</span>
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+            </button>
+          </form>
+
+          <div className="mt-8 text-center text-[11px] text-zinc-500">
+            Protegido con autenticación JWT HttpOnly, control de sesiones y aislamiento multiusuario.
+          </div>
         </div>
-
-        {errorMsg && (
-          <div
-            data-testid="login-error"
-            className="mb-4 flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-300"
-          >
-            <ShieldAlert className="h-4 w-4 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-[#94A3B8]">
-              Usuario o Correo Electrónico
-            </label>
-            <input
-              type="text"
-              required
-              data-testid="login-identifier"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="admin o correo@bananaclips.local"
-              className="mt-1.5 w-full rounded-xl border border-slate-700 bg-[#111318] px-3.5 py-2.5 text-sm text-[#F8FAFC] focus:border-[#FFD43B] focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-[#94A3B8]">Contraseña</label>
-            <input
-              type="password"
-              required
-              data-testid="login-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••••"
-              className="mt-1.5 w-full rounded-xl border border-slate-700 bg-[#111318] px-3.5 py-2.5 text-sm text-[#F8FAFC] focus:border-[#FFD43B] focus:outline-none"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            data-testid="login-submit"
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#FFD43B] px-5 py-3 text-sm font-bold text-[#111318] shadow-md transition hover:bg-[#FFB703] disabled:opacity-50"
-          >
-            <span>{loading ? 'Verificando acceso...' : 'Iniciar Sesión en el Estudio'}</span>
-            <ArrowRight className="h-4 w-4" />
-          </button>
-        </form>
       </div>
     </div>
   );
