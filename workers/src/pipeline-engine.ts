@@ -921,7 +921,8 @@ ${markersXml}
 function runCommandAsync(
   cmd: string,
   args: string[],
-  timeoutMs: number = 300000
+  timeoutMs: number = 300000,
+  onOutputChunk?: (chunkText: string) => void
 ): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -935,10 +936,22 @@ function runCommandAsync(
     }, timeoutMs);
 
     child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+      if (onOutputChunk) {
+        try {
+          onOutputChunk(text);
+        } catch {}
+      }
     });
     child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr += text;
+      if (onOutputChunk) {
+        try {
+          onOutputChunk(text);
+        } catch {}
+      }
     });
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -951,19 +964,50 @@ function runCommandAsync(
   });
 }
 
+export interface DownloadProgressInfo {
+  downloadPercent: number;
+  speedStr?: string;
+  etaStr?: string;
+  phaseText: string;
+}
+
 /**
  * Non-blocking async download from YouTube, Facebook, Twitch, Kick, or direct MP4 URL
- * using yt-dlp so the Node.js event loop stays 100% responsive during download.
+ * using yt-dlp with real-time percentage, speed, and ETA progress streaming.
  */
 export async function downloadVideoFromExternalUrlAsync(params: {
   url: string;
   outputPath: string;
   maxDurationSeconds?: number;
+  onProgress?: (info: DownloadProgressInfo) => void;
 }): Promise<{ downloadedTitle?: string; filePath: string }> {
   fs.mkdirSync(path.dirname(params.outputPath), { recursive: true });
 
   let downloadedTitle: string | undefined;
+  let lastReportedPct = 0;
+  let lastReportTime = 0;
+
+  const emitProgressSafely = (pct: number, speedStr?: string, etaStr?: string, customNote?: string) => {
+    if (!params.onProgress) return;
+    const clamped = Math.max(lastReportedPct, Math.min(100, Math.round(pct)));
+    const now = Date.now();
+    if (clamped === lastReportedPct && now - lastReportTime < 900 && !customNote) return;
+    lastReportedPct = clamped;
+    lastReportTime = now;
+    const details = [speedStr, etaStr ? `ETA ${etaStr}` : ''].filter(Boolean).join(' • ');
+    const phaseText = customNote
+      ? customNote
+      : `Descargando video (${clamped}%)${details ? ` — ${details}` : ''}...`;
+    params.onProgress({
+      downloadPercent: clamped,
+      speedStr,
+      etaStr,
+      phaseText,
+    });
+  };
+
   try {
+    emitProgressSafely(2, undefined, undefined, 'Conectando con YouTube/Facebook y obteniendo metadatos (2%)...');
     const titleProc = await runCommandAsync(
       'yt-dlp',
       ['--no-playlist', '--no-warnings', '--socket-timeout', '10', '--get-title', params.url],
@@ -971,12 +1015,17 @@ export async function downloadVideoFromExternalUrlAsync(params: {
     );
     if (titleProc.status === 0 && titleProc.stdout.trim()) {
       downloadedTitle = titleProc.stdout.trim().split('\n')[0].trim();
+      emitProgressSafely(5, undefined, undefined, `Iniciando descarga: "${downloadedTitle.slice(0, 42)}" (5%)...`);
+    } else {
+      emitProgressSafely(5, undefined, undefined, 'Iniciando descarga de flujo de video (5%)...');
     }
 
     const dlArgs = [
       '--no-playlist',
       '--no-warnings',
       '--no-check-certificates',
+      '--newline',
+      '--progress',
       '--download-sections',
       `*0-${params.maxDurationSeconds || 180}`,
       '-f',
@@ -988,8 +1037,51 @@ export async function downloadVideoFromExternalUrlAsync(params: {
       params.url,
     ];
 
-    await runCommandAsync('yt-dlp', dlArgs, 240000);
+    const startTimeMs = Date.now();
+    const targetMaxSec = params.maxDurationSeconds || 180;
+
+    // Heartbeat ticker in case ffmpeg --download-sections buffers stdout lines
+    const heartbeat = setInterval(() => {
+      const elapsedSec = (Date.now() - startTimeMs) / 1000;
+      const estimatedPct = Math.min(92, Math.round(8 + (elapsedSec / 32) * 80));
+      if (estimatedPct > lastReportedPct) {
+        emitProgressSafely(estimatedPct);
+      }
+    }, 1500);
+
+    try {
+      await runCommandAsync('yt-dlp', dlArgs, 240000, (chunk) => {
+        const lines = chunk.split(/[\r\n]+/);
+        for (const line of lines) {
+          // 1. Match standard yt-dlp percentage: [download]  45.2% of ~12.40MiB at  3.20MiB/s ETA 00:04
+          const dlMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%(?:.*?at\s+([^\s]+))?(?:.*?ETA\s+([0-9:]+))?/i);
+          if (dlMatch) {
+            const rawPct = parseFloat(dlMatch[1]);
+            const speed = dlMatch[2] && dlMatch[2] !== 'Unknown' ? dlMatch[2] : undefined;
+            const eta = dlMatch[3] && dlMatch[3] !== 'Unknown' ? dlMatch[3] : undefined;
+            emitProgressSafely(rawPct, speed, eta);
+            continue;
+          }
+
+          // 2. Match ffmpeg section download progress: time=00:01:15.40 ... speed=2.45x
+          const ffMatch = line.match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/);
+          if (ffMatch) {
+            const secs =
+              parseInt(ffMatch[1], 10) * 3600 +
+              parseInt(ffMatch[2], 10) * 60 +
+              parseFloat(ffMatch[3]);
+            const pct = Math.min(96, Math.max(5, Math.round((secs / targetMaxSec) * 100)));
+            const spMatch = line.match(/speed=\s*([^\s]+)/);
+            emitProgressSafely(pct, spMatch ? spMatch[1] : undefined);
+          }
+        }
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
+
     if (fs.existsSync(params.outputPath) && fs.statSync(params.outputPath).size > 10000) {
+      emitProgressSafely(97, undefined, undefined, 'Extrayendo subtítulos originales del video (97%)...');
       // Optional non-blocking pass to fetch VTT captions if available without affecting the video file
       try {
         await runCommandAsync(
@@ -1012,6 +1104,7 @@ export async function downloadVideoFromExternalUrlAsync(params: {
           15000
         );
       } catch {}
+      emitProgressSafely(100, undefined, undefined, 'Descarga completada (100%)');
       return { downloadedTitle, filePath: params.outputPath };
     }
   } catch {}

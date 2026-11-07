@@ -77,10 +77,17 @@ export function CreateClipsWizardModal() {
 
       let detail: { job: any; clips: any[] } = { job: null, clips: [] };
       while (true) {
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 1000));
         detail = await apiFetch<{ job: any; clips: any[] }>(`/jobs/${jobRes.jobId}`);
-        setProgressPhase(detail.job?.currentPhase || 'Procesando...');
-        setProgressPercent(detail.job?.progressPercent || 50);
+        const phaseStr = detail.job?.currentPhase || 'Procesando...';
+        setProgressPhase(phaseStr);
+        // If phaseStr contains explicit download percentage e.g. "(45%)", reflect it or use job progressPercent
+        const dlPctMatch = phaseStr.match(/\((\d+)%\)/);
+        if (detail.job?.status === 'DOWNLOADING' && dlPctMatch) {
+          setProgressPercent(Math.max(5, Math.min(99, parseInt(dlPctMatch[1], 10))));
+        } else {
+          setProgressPercent(detail.job?.progressPercent || 50);
+        }
         if (detail.job?.status === 'COMPLETED') break;
         if (detail.job?.status === 'FAILED' || detail.job?.status === 'CANCELED') {
           throw new Error(detail.job?.errorMessage || 'Error en el procesamiento del video.');

@@ -210,8 +210,8 @@ export async function executeAiClippingJob(jobId: string): Promise<{
           db,
           jobId,
           'DOWNLOADING',
-          'Descargando video desde URL (YouTube / Facebook / Web) con yt-dlp...',
-          6
+          'Descargando video (2%) — Conectando con YouTube/Facebook...',
+          2
         ))
       ) {
         return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
@@ -220,6 +220,12 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       const dl = await downloadVideoFromExternalUrlAsync({
         url: sourceRes.rows[0].originUrl,
         outputPath: videoFilePath,
+        onProgress: (info) => {
+          // Map download progress (0% -> 100%) smoothly onto overall job bar (2% -> 35%)
+          // while displaying the exact 0% - 100% download percentage in the status text!
+          const overallJobPct = Math.max(2, Math.min(35, Math.round(2 + (info.downloadPercent / 100) * 33)));
+          updateJobStatus(db, jobId, 'DOWNLOADING', info.phaseText, overallJobPct).catch(() => {});
+        },
       });
 
       if (dl.downloadedTitle && (video.title === 'Video desde URL' || video.title.startsWith('http'))) {
@@ -228,7 +234,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       }
     }
 
-    if (!(await updateJobStatus(db, jobId, 'PROBING', 'Importando video y verificando con FFprobe', 14))) {
+    if (!(await updateJobStatus(db, jobId, 'PROBING', 'Importando video y verificando con FFprobe (38%)', 38))) {
       return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
     }
 
@@ -269,12 +275,12 @@ export async function executeAiClippingJob(jobId: string): Promise<{
     await db.query(`UPDATE "Video" SET "thumbnailPath" = $1 WHERE id = $2`, [videoThumbRel, video.id]);
 
     // Stage 3 & 4: Normalización de audio y Detección de Voz (VAD)
-    if (!(await updateJobStatus(db, jobId, 'TRANSCODING', 'Preparando audio y detectando actividad de voz (VAD)', 24))) {
+    if (!(await updateJobStatus(db, jobId, 'TRANSCODING', 'Preparando audio y detectando actividad de voz (VAD)', 44))) {
       return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
     }
 
     // Stage 5 & 6: Transcripción y Segmentación por frases con timestamps por palabra
-    if (!(await updateJobStatus(db, jobId, 'TRANSCRIBING', 'Transcribiendo audio y sincronizando palabras', 40))) {
+    if (!(await updateJobStatus(db, jobId, 'TRANSCRIBING', 'Transcribiendo audio y sincronizando palabras', 52))) {
       return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
     }
 

@@ -337,17 +337,24 @@ export default function AiClippingPage() {
       let currentJob: any = {
         id: jobRes.jobId,
         status: 'QUEUED',
-        currentPhase: 'Iniciando descarga y análisis...',
-        progressPercent: 5,
+        currentPhase: 'Iniciando descarga y análisis (2%)...',
+        progressPercent: 2,
       };
       setActiveJob(currentJob);
 
       while (true) {
-        await new Promise((r) => setTimeout(r, 2500));
+        await new Promise((r) => setTimeout(r, 1000));
         try {
           const statusRes = await apiFetch<{ job: any }>(`/jobs/${jobRes.jobId}`);
           if (statusRes?.job) {
             currentJob = statusRes.job;
+            const dlPctMatch = (currentJob.currentPhase || '').match(/\((\d+)%\)/);
+            if (currentJob.status === 'DOWNLOADING' && dlPctMatch) {
+              currentJob = {
+                ...currentJob,
+                progressPercent: Math.max(2, Math.min(99, parseInt(dlPctMatch[1], 10))),
+              };
+            }
             setActiveJob(currentJob);
             if (currentJob.status === 'COMPLETED') {
               break;
