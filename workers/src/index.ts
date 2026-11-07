@@ -6,7 +6,7 @@ import { calculateMultimodalClipScore, SUBTITLE_TEMPLATES } from '@banana/shared
 import type { AspectRatio, JobState, WordTimestamp } from '@banana/video-types';
 import {
   buildSrtAndVttFromWords,
-  downloadVideoFromExternalUrl,
+  downloadVideoFromExternalUrlAsync,
   generateAssSubtitles,
   generateThumbnailFfmpeg,
   getStorageRoot,
@@ -213,7 +213,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         return { status: 'CANCELED', clipsCreated: 0, clipIds: [] };
       }
 
-      const dl = downloadVideoFromExternalUrl({
+      const dl = await downloadVideoFromExternalUrlAsync({
         url: sourceRes.rows[0].originUrl,
         outputPath: videoFilePath,
       });

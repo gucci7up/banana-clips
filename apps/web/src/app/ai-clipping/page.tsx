@@ -119,15 +119,24 @@ export default function AiClippingPage() {
       setActiveJob(currentJob);
 
       while (true) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const statusRes = await apiFetch<{ job: any }>(`/jobs/${jobRes.jobId}`);
-        currentJob = statusRes.job;
-        setActiveJob(currentJob);
-        if (currentJob.status === 'COMPLETED') {
-          break;
-        }
-        if (currentJob.status === 'FAILED' || currentJob.status === 'CANCELED') {
-          throw new Error(currentJob.errorMessage || 'El trabajo falló o fue cancelado.');
+        await new Promise((r) => setTimeout(r, 2500));
+        try {
+          const statusRes = await apiFetch<{ job: any }>(`/jobs/${jobRes.jobId}`);
+          if (statusRes?.job) {
+            currentJob = statusRes.job;
+            setActiveJob(currentJob);
+            if (currentJob.status === 'COMPLETED') {
+              break;
+            }
+            if (currentJob.status === 'FAILED' || currentJob.status === 'CANCELED') {
+              throw new Error(currentJob.errorMessage || 'El trabajo falló o fue cancelado.');
+            }
+          }
+        } catch (pollErr: any) {
+          if (pollErr?.message?.includes('falló') || pollErr?.message?.includes('cancelado')) {
+            throw pollErr;
+          }
+          // Ignore transient network poll glitch while heavy FFmpeg work runs
         }
       }
 

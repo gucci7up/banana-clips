@@ -15,7 +15,6 @@ import { validateSafeExternalUrl } from '@banana/shared';
 import {
   computeEmbedding384,
   cosineSimilarity,
-  downloadVideoFromExternalUrl,
   ensureFixtureVideo,
   executeAiClippingJob,
   generateThumbnailFfmpeg,

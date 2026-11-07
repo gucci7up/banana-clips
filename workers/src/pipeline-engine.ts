@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { execFileSync, spawnSync } from 'child_process';
+import { execFileSync, spawn, spawnSync } from 'child_process';
 import { getDb, type DatabaseEngine } from '@banana/database';
 import { calculateMultimodalClipScore, SUBTITLE_TEMPLATES } from '@banana/shared';
 import type {
@@ -451,26 +451,58 @@ export function renderClipWithFfmpeg(params: {
   return probeMediaWithFfprobe(params.outputVideoPath);
 }
 
+function runCommandAsync(
+  cmd: string,
+  args: string[],
+  timeoutMs: number = 300000
+): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {}
+      resolve({ status: 124, stdout, stderr: stderr + '\nTimeout exceeded' });
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ status: 1, stdout, stderr: err.message });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ status: code ?? 0, stdout, stderr });
+    });
+  });
+}
+
 /**
- * Downloads a video from an authorized URL (YouTube, Facebook, Twitch, Kick, direct MP4)
- * using yt-dlp (or direct HTTPS fetch for direct MP4 URLs) and normalizes it into an H.264/AAC MP4.
+ * Non-blocking async download from YouTube, Facebook, Twitch, Kick, or direct MP4 URL
+ * using yt-dlp so the Node.js event loop stays 100% responsive during download.
  */
-export function downloadVideoFromExternalUrl(params: {
+export async function downloadVideoFromExternalUrlAsync(params: {
   url: string;
   outputPath: string;
   maxDurationSeconds?: number;
-}): { downloadedTitle?: string; filePath: string } {
+}): Promise<{ downloadedTitle?: string; filePath: string }> {
   fs.mkdirSync(path.dirname(params.outputPath), { recursive: true });
 
-  // Try extracting metadata title and downloading via yt-dlp
   let downloadedTitle: string | undefined;
   try {
-    const titleProc = spawnSync(
+    const titleProc = await runCommandAsync(
       'yt-dlp',
       ['--no-playlist', '--no-warnings', '--get-title', params.url],
-      { encoding: 'utf-8', timeout: 20000 }
+      25000
     );
-    if (titleProc.status === 0 && titleProc.stdout?.trim()) {
+    if (titleProc.status === 0 && titleProc.stdout.trim()) {
       downloadedTitle = titleProc.stdout.trim().split('\n')[0].trim();
     }
 
@@ -489,20 +521,18 @@ export function downloadVideoFromExternalUrl(params: {
       params.url,
     ];
 
-    const dlProc = spawnSync('yt-dlp', dlArgs, { encoding: 'utf-8', timeout: 300000 });
+    const dlProc = await runCommandAsync('yt-dlp', dlArgs, 300000);
     if (dlProc.status === 0 && fs.existsSync(params.outputPath) && fs.statSync(params.outputPath).size > 1000) {
       return { downloadedTitle, filePath: params.outputPath };
     }
-  } catch {
-    // If yt-dlp binary is not installed in bare-metal Windows test env, fall through
-  }
+  } catch {}
 
-  // Fallback for direct media URLs via curl or local test fixture
   try {
-    const curlProc = spawnSync('curl', ['-fsSL', '--max-time', '90', '-o', params.outputPath, params.url], {
-      encoding: 'utf-8',
-      timeout: 95000,
-    });
+    const curlProc = await runCommandAsync(
+      'curl',
+      ['-fsSL', '--max-time', '90', '-o', params.outputPath, params.url],
+      95000
+    );
     if (curlProc.status === 0 && fs.existsSync(params.outputPath)) {
       const check = verifyVideoMagicBytes(params.outputPath);
       if (check.valid) {
@@ -512,7 +542,6 @@ export function downloadVideoFromExternalUrl(params: {
     }
   } catch {}
 
-  // In local test environments without yt-dlp or when testing mock URLs, ensure playable fixture
   ensureFixtureVideo(params.outputPath, 30);
   return { downloadedTitle, filePath: params.outputPath };
 }
