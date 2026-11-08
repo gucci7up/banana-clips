@@ -570,7 +570,7 @@ export default function SocialPublishingPage() {
                       type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(xThread.join('\n\n'));
-                        setStatusToast('📋 ¡Hilo de 3 Tweets copiado al portapapeles!');
+                        setNotice('📋 ¡Hilo de 3 Tweets copiado al portapapeles!');
                       }}
                       className="rounded-lg bg-sky-500/20 px-2.5 py-1 text-[10px] font-bold text-sky-300 hover:bg-sky-500/30"
                     >
