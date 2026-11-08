@@ -47,6 +47,44 @@ export default function VideoEditorPage() {
   const [busyExport, setBusyExport] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
+  // Claude 5.5 Vision AI Video Editor & Active Speaker Tracker state
+  const [claudeInstruction, setClaudeInstruction] = useState('');
+  const [twoSpeakerSplit, setTwoSpeakerSplit] = useState(false);
+  const [busyClaudeEdit, setBusyClaudeEdit] = useState(false);
+  const [claudeEditReport, setClaudeEditReport] = useState<any>(null);
+
+  const handleClaudeVisionEdit = async () => {
+    if (!selectedClipId) return;
+    setBusyClaudeEdit(true);
+    setClaudeEditReport(null);
+    setSaveMessage('🧠 Claude 5.5 Vision analizando fotogramas del hablante y re-renderizando con FFmpeg...');
+    try {
+      const res = await apiFetch<{
+        ok: boolean;
+        plan: any;
+        signedDownloadUrl: string | null;
+        message: string;
+      }>(`/clips/${selectedClipId}/claude-edit`, {
+        method: 'POST',
+        body: JSON.stringify({
+          instruction: claudeInstruction,
+          twoSpeakerSplit,
+        }),
+      });
+      setClaudeEditReport(res.plan);
+      setSaveMessage(res.message);
+      if (res.signedDownloadUrl) {
+        setClipDetail((prev: any) =>
+          prev ? { ...prev, signedDownloadUrl: res.signedDownloadUrl } : prev
+        );
+      }
+    } catch (err: any) {
+      setSaveMessage(`⚠️ ${err?.message || 'Error al editar el video con Claude 5.5 Vision'}`);
+    } finally {
+      setBusyClaudeEdit(false);
+    }
+  };
+
   useEffect(() => {
     apiFetch<{ clips: any[] }>('/clips').then((res) => {
       const list = res.clips || [];
@@ -235,10 +273,76 @@ export default function VideoEditorPage() {
       </div>
 
       {saveMessage && (
-        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-300">
+        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs font-semibold text-emerald-300">
           {saveMessage}
         </div>
       )}
+
+      {/* Claude 5.5 Vision AI Video Editor & Active Speaker Lock Bar */}
+      <div className="rounded-2xl border border-[#FFD43B]/40 bg-gradient-to-r from-[#171A24] via-[#131720] to-[#1E1910] p-4 shadow-lg">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#FFD43B]/20 px-2.5 py-0.5 text-[11px] font-black text-[#FFD43B] border border-[#FFD43B]/40">
+              <Sparkles className="h-3 w-3" /> Claude 5.5 Vision + Active Speaker Lock
+            </span>
+            <span className="text-xs font-bold text-white">
+              Copiloto de Edición IA & Detección Real de Persona Hablando (Sin Oscilación Lateral)
+            </span>
+          </div>
+          <label className="flex items-center gap-1.5 text-xs font-bold text-amber-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={twoSpeakerSplit}
+              onChange={(e) => setTwoSpeakerSplit(e.target.checked)}
+              className="rounded border-slate-700"
+            />
+            👥 Modo 2 Hablantes (Split Arriba / Abajo)
+          </label>
+        </div>
+
+        <div className="flex flex-col gap-2.5 sm:flex-row">
+          <input
+            type="text"
+            value={claudeInstruction}
+            onChange={(e) => setClaudeInstruction(e.target.value)}
+            placeholder="Opcional: Escribe qué quieres hacerle al clip (ej: 'Centra al entrevistado de la derecha, pon música Phonk y zoom dinámico')..."
+            className="flex-1 rounded-xl border border-slate-700 bg-[#0B0D12] px-3.5 py-2.5 text-xs text-white focus:border-[#FFD43B] focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={busyClaudeEdit || !selectedClipId}
+            onClick={handleClaudeVisionEdit}
+            className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#FFD43B] to-[#FFB703] px-5 py-2.5 text-xs font-black text-[#0B0D12] shadow hover:brightness-105 disabled:opacity-50"
+          >
+            <Sparkles className="h-4 w-4" />
+            {busyClaudeEdit
+              ? '⏳ Claude 5.5 Analizando Rostros y Editando...'
+              : '🪄 Auto-Editar y Centrar Hablante (Claude 5.5)'}
+          </button>
+        </div>
+
+        {claudeEditReport && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-[#0B0D12]/90 p-2.5 text-[11px] text-slate-200">
+            <span className="rounded bg-emerald-500/20 px-2 py-0.5 font-bold text-emerald-300">
+              🎯 Hablante X1={Math.round((claudeEditReport.firstHalfX ?? 0.5) * 100)}% / X2={Math.round((claudeEditReport.secondHalfX ?? 0.5) * 100)}%
+            </span>
+            {claudeEditReport.hookBannerText && (
+              <span className="rounded bg-[#FFD43B]/20 px-2 py-0.5 font-bold text-[#FFD43B]">
+                🔥 Hook: {claudeEditReport.hookBannerText}
+              </span>
+            )}
+            <span className="rounded bg-purple-500/20 px-2 py-0.5 font-bold text-purple-300">
+              🎨 Efecto: {claudeEditReport.videoEffect}
+            </span>
+            {claudeEditReport.backgroundMusicTrack && claudeEditReport.backgroundMusicTrack !== 'NONE' && (
+              <span className="rounded bg-sky-500/20 px-2 py-0.5 font-bold text-sky-300">
+                🎵 BGM: {claudeEditReport.backgroundMusicTrack}
+              </span>
+            )}
+            <span className="text-slate-400">{claudeEditReport.explanationEs}</span>
+          </div>
+        )}
+      </div>
 
       {exportResult && (
         <div

@@ -1753,11 +1753,320 @@ export async function applyVoiceDubbingToClipAsync(params: {
 }
 
 /**
+ * Real Active Speaker Face + Mouth Motion Detector (Python + NumPy + FFmpeg RGB frames).
+ * Analyzes skin-tone regions in the head/torso zone combined with mouth/facial micro-motion
+ * to lock the 9:16 vertical crop directly onto the person who is speaking, eliminating side-to-side swaying.
+ */
+export function detectActiveSpeakerTrackSync(
+  sourceVideoPath: string,
+  startSec: number,
+  durationSec: number
+): {
+  firstHalfX: number;
+  secondHalfX: number;
+  switchSec: number;
+  isTwoSpeakerDialogue: boolean;
+} {
+  const safeDur = Math.max(2, Math.min(45, Number(durationSec) || 15));
+  const halfDur = Number((safeDur / 2).toFixed(2));
+  const fallback = {
+    firstHalfX: 0.5,
+    secondHalfX: 0.5,
+    switchSec: halfDur,
+    isTwoSpeakerDialogue: false,
+  };
+
+  if (!sourceVideoPath || !fs.existsSync(sourceVideoPath)) {
+    return fallback;
+  }
+
+  const pyScript = `
+import sys, subprocess, json
+import numpy as np
+
+video_path = sys.argv[1]
+start_sec = float(sys.argv[2])
+dur_sec = float(sys.argv[3])
+
+cmd = [
+    "ffmpeg", "-nostdin", "-v", "error",
+    "-ss", str(max(0.0, start_sec)),
+    "-i", video_path,
+    "-t", str(min(30.0, dur_sec)),
+    "-vf", "fps=4,scale=320:180",
+    "-f", "rawvideo", "-pix_fmt", "rgb24", "-"
+]
+proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=18)
+raw = proc.stdout
+frame_size = 320 * 180 * 3
+n_frames = len(raw) // frame_size
+if n_frames < 3:
+    print(json.dumps({"firstHalfX": 0.5, "secondHalfX": 0.5, "isTwo": False}))
+    sys.exit(0)
+
+frames = np.frombuffer(raw[:n_frames * frame_size], dtype=np.uint8).reshape((n_frames, 180, 320, 3)).astype(np.float32)
+# Head & upper-body speaking zone (y from 12 to 124 out of 180)
+roi = frames[:, 12:124, :, :]
+R, G, B = roi[:, :, :, 0], roi[:, :, :, 1], roi[:, :, :, 2]
+
+# Human skin-tone mask (works across diverse lighting and skin tones)
+skin = ((R > 75) & (G > 30) & (B > 18) & (R > G) & (R > B) & ((R - G) > 10)).astype(np.float32)
+
+# Temporal mouth/head speaking motion between consecutive frames
+motion = np.abs(np.diff(roi, axis=0)).mean(axis=3)
+skin_mid = skin[1:]
+# Speaking activity = facial/gesture motion weighted strongly by skin/face presence
+activity = motion * (1.0 + 4.5 * skin_mid) + (skin_mid * 6.0)
+
+# Smooth horizontally with a 40px window (approx head width in 320px frame)
+col_activity = activity.mean(axis=1) # shape: (n_frames-1, 320)
+kernel = np.ones(40, dtype=np.float32) / 40.0
+
+mid_idx = max(1, (n_frames - 1) // 2)
+first_prof = np.convolve(col_activity[:mid_idx].mean(axis=0), kernel, mode='same')
+second_prof = np.convolve(col_activity[mid_idx:].mean(axis=0), kernel, mode='same')
+
+# Avoid extreme 8% borders
+margin = 26
+x1 = int(np.argmax(first_prof[margin:320-margin]) + margin) / 320.0
+x2 = int(np.argmax(second_prof[margin:320-margin]) + margin) / 320.0
+
+# Convert from image coordinate (0..1) to FFmpeg crop offset ratio (0..1 of (in_w - out_w))
+# When a speaker is at x_img in a 16:9 frame and we crop a 9:16 window (width ~ 0.316 of 16:9),
+# crop_ratio = clamp((x_img - 0.158) / (1.0 - 0.316), 0.0, 1.0)
+def to_crop_ratio(x_img):
+    r = (x_img - 0.16) / 0.68
+    return float(max(0.05, min(0.95, r)))
+
+c1 = to_crop_ratio(x1)
+c2 = to_crop_ratio(x2)
+
+# Anti-sway hysteresis: if the speaker hasn't changed sides (> 0.18 shift), lock rock-steady on a single position!
+if abs(c1 - c2) < 0.18:
+    avg_c = round((c1 + c2) / 2.0, 3)
+    c1, c2 = avg_c, avg_c
+    is_two = False
+else:
+    c1, c2 = round(c1, 3), round(c2, 3)
+    is_two = True
+
+print(json.dumps({"firstHalfX": c1, "secondHalfX": c2, "isTwo": is_two}))
+`;
+
+  try {
+    const proc = spawnSync(
+      'python3',
+      ['-c', pyScript, sourceVideoPath, String(Math.max(0, startSec)), String(safeDur)],
+      { encoding: 'utf-8', timeout: 22000 }
+    );
+    if (proc.status === 0 && proc.stdout) {
+      const m = proc.stdout.trim().match(/\{[\s\S]*\}/);
+      if (m) {
+        const parsed = JSON.parse(m[0]);
+        return {
+          firstHalfX: Math.max(0.05, Math.min(0.95, Number(parsed.firstHalfX ?? 0.5))),
+          secondHalfX: Math.max(0.05, Math.min(0.95, Number(parsed.secondHalfX ?? 0.5))),
+          switchSec: halfDur,
+          isTwoSpeakerDialogue: Boolean(parsed.isTwo),
+        };
+      }
+    }
+  } catch {}
+
+  return fallback;
+}
+
+/**
+ * Uses Claude Haiku 5.5 Vision (`claude-haiku-5-5` with `image_input`) + NumPy Active Speaker Tracker
+ * to visually inspect 2 keyframes from the video, lock onto the real person speaking, and generate a complete AI Video Edit Plan.
+ */
+export async function detectSpeakerAndEditPlanWithClaudeVisionAsync(params: {
+  videoPath: string;
+  startSec: number;
+  durationSec: number;
+  transcriptText: string;
+  userInstruction?: string;
+}): Promise<{
+  firstHalfX: number;
+  secondHalfX: number;
+  twoSpeakersSplitRecommended: boolean;
+  hookBannerText: string;
+  debateCtaQuestion: string;
+  videoEffect: VideoEffectPreset;
+  backgroundMusicTrack: ViralMusicTrackId;
+  splitScreenMode: SplitScreenRetentionMode;
+  explanationEs: string;
+}> {
+  const cvTrack = detectActiveSpeakerTrackSync(params.videoPath, params.startSec, params.durationSec);
+  let firstHalfX = cvTrack.firstHalfX;
+  let secondHalfX = cvTrack.secondHalfX;
+  let twoSpeakersSplitRecommended = false;
+  let hookBannerText = '';
+  let debateCtaQuestion = '¿QUÉ OPINAS DE ESTO? TE LEO ABAJO 👇';
+  let videoEffect: VideoEffectPreset = 'VIBRANT_BOOST';
+  let backgroundMusicTrack: ViralMusicTrackId = 'NONE';
+  let splitScreenMode: SplitScreenRetentionMode = 'NONE';
+  let explanationEs = `Encuadre bloqueado en hablante activo (X1=${Math.round(firstHalfX * 100)}%, X2=${Math.round(secondHalfX * 100)}%) sin oscilación lateral.`;
+
+  const apiKey = DEFAULT_ANTHROPIC_CLAUDE_KEY.trim();
+  if (!apiKey || !fs.existsSync(params.videoPath)) {
+    return {
+      firstHalfX,
+      secondHalfX,
+      twoSpeakersSplitRecommended,
+      hookBannerText,
+      debateCtaQuestion,
+      videoEffect,
+      backgroundMusicTrack,
+      splitScreenMode,
+      explanationEs,
+    };
+  }
+
+  const tmpFrame1 = `${params.videoPath}.claude_f1_${Date.now()}.jpg`;
+  const tmpFrame2 = `${params.videoPath}.claude_f2_${Date.now()}.jpg`;
+
+  try {
+    const dur = Math.max(4, Number(params.durationSec) || 15);
+    const t1 = Math.max(0, params.startSec + dur * 0.25);
+    const t2 = Math.max(0, params.startSec + dur * 0.72);
+
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-ss', String(t1), '-i', params.videoPath, '-frames:v', '1', '-vf', 'scale=480:270', '-q:v', '5', tmpFrame1],
+      { stdio: 'ignore', timeout: 10000 }
+    );
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-ss', String(t2), '-i', params.videoPath, '-frames:v', '1', '-vf', 'scale=480:270', '-q:v', '5', tmpFrame2],
+      { stdio: 'ignore', timeout: 10000 }
+    );
+
+    const contentBlocks: any[] = [];
+    if (fs.existsSync(tmpFrame1)) {
+      contentBlocks.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/jpeg',
+          data: fs.readFileSync(tmpFrame1).toString('base64'),
+        },
+      });
+    }
+    if (fs.existsSync(tmpFrame2)) {
+      contentBlocks.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/jpeg',
+          data: fs.readFileSync(tmpFrame2).toString('base64'),
+        },
+      });
+    }
+
+    contentBlocks.push({
+      type: 'text',
+      text: `Analiza los 2 fotogramas reales del video (Frame 1 = primera mitad, Frame 2 = segunda mitad) y la transcripción: "${(params.transcriptText || '').slice(0, 380)}".
+Instrucción del usuario: "${params.userInstruction || 'Centra al 100% a la persona que está hablando y aplica la mejor edición viral'}".
+Detector CV local sugirió: X1=${cvTrack.firstHalfX}, X2=${cvTrack.secondHalfX}.
+Devuelve ÚNICAMENTE un JSON válido con:
+{
+  "speaker1X": número entre 0.05 (izquierda) y 0.95 (derecha) indicando dónde está la cara de la persona que habla en el Frame 1,
+  "speaker2X": número entre 0.05 (izquierda) y 0.95 (derecha) indicando dónde está la cara de la persona que habla en el Frame 2,
+  "twoSpeakersSplitRecommended": boolean (true solo si el usuario pidió split de 2 hablantes simultáneos),
+  "hookBannerText": "GANCHO DE 4 A 6 PALABRAS EN MAYÚSCULAS",
+  "debateCtaQuestion": "PREGUNTA POLARIZANTE EN MAYÚSCULAS PARA COMENTARIOS",
+  "videoEffect": uno de ["VIBRANT_BOOST", "CINEMATIC_CONTRAST", "DYNAMIC_ZOOM"],
+  "backgroundMusicTrack": uno de ["NONE", "BREAKING_TENSION", "PHONK_DRIFT", "EPIC_CINEMA", "LOFI_CHILL"],
+  "splitScreenMode": uno de ["NONE", "HYPNOTIC_TUNNEL", "NEON_RAMP", "GAMEPLAY_PARKOUR"],
+  "explanationEs": "Breve explicación en español de a quién detectaste hablando en la imagen y qué ajustes aplicaste"
+}`,
+    });
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-5-5',
+        max_tokens: 340,
+        thinking: { type: 'disabled' },
+        messages: [{ role: 'user', content: contentBlocks }],
+      }),
+      signal: AbortSignal.timeout(18000),
+    });
+
+    if (res.ok) {
+      const data: any = await res.json();
+      const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
+      const textBlock = blocks.find((b) => b.type === 'text') || blocks[0];
+      const rawText = String(textBlock?.text || '');
+      const m = rawText.match(/\{[\s\S]*\}/);
+      if (m) {
+        const parsed = JSON.parse(m[0]);
+        const toCrop = (xImg: number) => Math.max(0.05, Math.min(0.95, (xImg - 0.16) / 0.68));
+        if (typeof parsed.speaker1X === 'number') {
+          // Blend 65% Claude Vision face coordinate + 35% CV mouth-motion tracker for rock-solid accuracy
+          firstHalfX = Number((toCrop(parsed.speaker1X) * 0.65 + cvTrack.firstHalfX * 0.35).toFixed(3));
+        }
+        if (typeof parsed.speaker2X === 'number') {
+          secondHalfX = Number((toCrop(parsed.speaker2X) * 0.65 + cvTrack.secondHalfX * 0.35).toFixed(3));
+        }
+        if (Math.abs(firstHalfX - secondHalfX) < 0.16) {
+          const avg = Number(((firstHalfX + secondHalfX) / 2).toFixed(3));
+          firstHalfX = avg;
+          secondHalfX = avg;
+        }
+        twoSpeakersSplitRecommended = Boolean(parsed.twoSpeakersSplitRecommended);
+        if (parsed.hookBannerText) {
+          hookBannerText = String(parsed.hookBannerText).replace(/["{}]/g, '').toUpperCase().trim().slice(0, 48);
+        }
+        if (parsed.debateCtaQuestion) {
+          debateCtaQuestion = String(parsed.debateCtaQuestion).replace(/["{}]/g, '').toUpperCase().trim().slice(0, 54);
+        }
+        if (['VIBRANT_BOOST', 'CINEMATIC_CONTRAST', 'DYNAMIC_ZOOM'].includes(parsed.videoEffect)) {
+          videoEffect = parsed.videoEffect as VideoEffectPreset;
+        }
+        if (['NONE', 'BREAKING_TENSION', 'PHONK_DRIFT', 'EPIC_CINEMA', 'LOFI_CHILL'].includes(parsed.backgroundMusicTrack)) {
+          backgroundMusicTrack = parsed.backgroundMusicTrack as ViralMusicTrackId;
+        }
+        if (['NONE', 'HYPNOTIC_TUNNEL', 'NEON_RAMP', 'GAMEPLAY_PARKOUR'].includes(parsed.splitScreenMode)) {
+          splitScreenMode = parsed.splitScreenMode as SplitScreenRetentionMode;
+        }
+        if (parsed.explanationEs) {
+          explanationEs = String(parsed.explanationEs).trim();
+        }
+      }
+    }
+  } catch {} finally {
+    for (const f of [tmpFrame1, tmpFrame2]) {
+      try {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      } catch {}
+    }
+  }
+
+  return {
+    firstHalfX,
+    secondHalfX,
+    twoSpeakersSplitRecommended,
+    hookBannerText,
+    debateCtaQuestion,
+    videoEffect,
+    backgroundMusicTrack,
+    splitScreenMode,
+    explanationEs,
+  };
+}
+
+/**
  * Renders a real playable MP4 (H.264 + AAC) clip using FFmpeg with Auto-Reframe (9:16, 1:1, 4:5, 16:9),
- * optional 50/50 Split-Screen Hypnotic Retention Mode, Auto-Ducked Viral Background Music,
- * burned-in ASS animated karaoke subtitles + Hook Banner + Brand Kit via libass,
- * Motion Graphics custom Image/Logo Watermark Overlay (PNG/JPG/WEBP),
- * OpusClip AI B-Roll Cutaway / Auto Zoom / Auto Transitions / Auto Color Correction, and AI Studio Audio Enhancer DSP.
+ * Real Active Speaker Face + Mouth Motion Locking (zero side-to-side swaying),
+ * optional 50/50 Split-Screen Hypnotic Retention Mode or 2-Speaker Podcast Stack,
+ * Auto-Ducked Viral Background Music, and burned-in ASS animated karaoke subtitles.
  */
 export function renderClipWithFfmpeg(params: {
   sourceVideoPath: string;
@@ -1766,8 +2075,10 @@ export function renderClipWithFfmpeg(params: {
   durationSec: number;
   aspectRatio: AspectRatio;
   resolution: ExportResolution;
-  reframeMode?: ReframeMode;
+  reframeMode?: ReframeMode | string;
   centerXNormalized?: number;
+  speakerFirstHalfX?: number;
+  speakerSecondHalfX?: number;
   speed?: number;
   volume?: number;
   muted?: boolean;
@@ -1826,20 +2137,39 @@ export function renderClipWithFfmpeg(params: {
     (params.autoColorCorrection || params.videoEffect === 'VIBRANT_BOOST' || useBroll);
   const useTransitions = params.autoTransitions || params.videoEffect === 'FADE_TRANSITIONS';
 
-  // Build FFmpeg video filter chain with smooth crop / pad reframe
+  // Active Speaker Face + Mouth Motion Tracking (no side-to-side swaying!)
+  let spk1 = params.speakerFirstHalfX ?? params.centerXNormalized;
+  let spk2 = params.speakerSecondHalfX ?? spk1;
+  if (
+    spk1 === undefined &&
+    params.aspectRatio !== '16:9' &&
+    params.reframeMode !== 'LEVEL_1_CENTER_CROP' &&
+    params.reframeMode !== 'CENTER'
+  ) {
+    const tracked = detectActiveSpeakerTrackSync(params.sourceVideoPath, params.startSec, clipDur);
+    spk1 = tracked.firstHalfX;
+    spk2 = tracked.secondHalfX;
+  }
+  const xRatio1 = Number(Math.max(0.05, Math.min(0.95, spk1 ?? 0.5)).toFixed(3));
+  const xRatio2 = Number(Math.max(0.05, Math.min(0.95, spk2 ?? xRatio1)).toFixed(3));
+  const switchSec = Number((clipDur / 2).toFixed(2));
+  const xExpr =
+    Math.abs(xRatio1 - xRatio2) < 0.08
+      ? `(in_w-out_w)*${xRatio1}`
+      : `if(lt(t,${switchSec}),(in_w-out_w)*${xRatio1},(in_w-out_w)*${xRatio2})`;
+
+  // Build FFmpeg video filter chain with rock-steady speaker lock (zero sin(t) swaying!)
   const vfParts: string[] = [];
-  if (useBroll) {
-    const zoomW = Math.round(targetW * 1.12) - (Math.round(targetW * 1.12) % 2);
-    const zoomH = Math.round(targetH * 1.12) - (Math.round(targetH * 1.12) % 2);
-    vfParts.push(
-      `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}:x='(in_w-out_w)/2+sin(t*0.75)*(in_w-out_w)*0.28':y='(in_h-out_h)/2'`
-    );
-  } else if (useZoom) {
+  if (useBroll || useZoom) {
     const zoomW = Math.round(targetW * 1.08) - (Math.round(targetW * 1.08) % 2);
     const zoomH = Math.round(targetH * 1.08) - (Math.round(targetH * 1.08) % 2);
-    vfParts.push(`scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}`);
+    vfParts.push(
+      `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}:x='${xExpr}':y='(in_h-out_h)*0.38'`
+    );
   } else {
-    vfParts.push(`scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}`);
+    vfParts.push(
+      `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}:x='${xExpr}':y='(in_h-out_h)/2'`
+    );
   }
 
   // Apply Color Correction & Transitions
@@ -1892,6 +2222,10 @@ export function renderClipWithFfmpeg(params: {
   const resolvedStorageDir = params.storageDir || path.dirname(path.dirname(params.outputVideoPath));
   const useSplitScreen =
     Boolean(params.splitScreenMode && params.splitScreenMode !== 'NONE') && params.aspectRatio === '9:16';
+  const useTwoSpeakerStack =
+    !useSplitScreen &&
+    params.aspectRatio === '9:16' &&
+    params.reframeMode === 'LEVEL_3_SMART_SPLIT_COMPOSITION';
 
   // Place -ss BEFORE -i for fast seek, and -t AFTER -i so output clip duration is strictly enforced!
   const args: string[] = [
@@ -1902,7 +2236,32 @@ export function renderClipWithFfmpeg(params: {
     params.sourceVideoPath,
   ];
 
-  if (useSplitScreen && params.splitScreenMode) {
+  if (useTwoSpeakerStack) {
+    // 2-Speaker Podcast Vertical Stack: Left Speaker on Top Half, Right Speaker on Bottom Half
+    const halfH = Math.floor(targetH / 2) - (Math.floor(targetH / 2) % 2);
+    const botH = targetH - halfH;
+    const postStackParts: string[] = [
+      `drawbox=x=0:y=${halfH - 3}:w=${targetW}:h=6:color=#FFD43B@0.95:t=fill`,
+    ];
+    if (useColor) {
+      postStackParts.push('eq=saturation=1.22:contrast=1.08:brightness=0.02');
+    }
+    if (useTransitions) {
+      const fadeOutStart = Math.max(0.5, clipDur - 0.5).toFixed(2);
+      postStackParts.push(`fade=t=in:st=0:d=0.4,fade=t=out:st=${fadeOutStart}:d=0.4`);
+    }
+    if (params.subtitleAssPath && fs.existsSync(params.subtitleAssPath)) {
+      const escapedAss = params.subtitleAssPath
+        .replace(/\\/g, '/')
+        .replace(/:/g, '\\:')
+        .replace(/'/g, "\\'");
+      postStackParts.push(`ass='${escapedAss}'`);
+    }
+    const leftCropX = Math.min(xRatio1, 0.25);
+    const rightCropX = Math.max(xRatio2, 0.75);
+    const filterComplex = `[0:v]split=2[vleft][vright];[vleft]scale=${targetW}:${halfH}:force_original_aspect_ratio=increase,crop=${targetW}:${halfH}:x='(in_w-out_w)*${leftCropX}':y='(in_h-out_h)*0.35'[topv];[vright]scale=${targetW}:${botH}:force_original_aspect_ratio=increase,crop=${targetW}:${botH}:x='(in_w-out_w)*${rightCropX}':y='(in_h-out_h)*0.35'[botv];[topv][botv]vstack=inputs=2,${postStackParts.join(',')}[vout]`;
+    args.push('-t', String(clipDur), '-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?');
+  } else if (useSplitScreen && params.splitScreenMode) {
     const loopPath = ensureHypnoticLoopVideo(resolvedStorageDir, params.splitScreenMode);
     args.push('-stream_loop', '-1', '-i', loopPath);
     const halfH = Math.floor(targetH / 2) - (Math.floor(targetH / 2) % 2);
@@ -1927,7 +2286,7 @@ export function renderClipWithFfmpeg(params: {
     if (params.speed && params.speed !== 1 && params.speed >= 0.5 && params.speed <= 2.0) {
       postStackParts.push(`setpts=${(1 / params.speed).toFixed(3)}*PTS`);
     }
-    const filterComplex = `[0:v]scale=${targetW}:${halfH}:force_original_aspect_ratio=increase,crop=${targetW}:${halfH}[topv];[1:v]scale=${targetW}:${botH}:force_original_aspect_ratio=increase,crop=${targetW}:${botH}[botv];[topv][botv]vstack=inputs=2,${postStackParts.join(',')}[vout]`;
+    const filterComplex = `[0:v]scale=${targetW}:${halfH}:force_original_aspect_ratio=increase,crop=${targetW}:${halfH}:x='${xExpr}':y='(in_h-out_h)*0.38'[topv];[1:v]scale=${targetW}:${botH}:force_original_aspect_ratio=increase,crop=${targetW}:${botH}[botv];[topv][botv]vstack=inputs=2,${postStackParts.join(',')}[vout]`;
     args.push('-t', String(clipDur), '-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?');
   } else if (hasWatermarkImage && params.watermarkImagePath) {
     args.push('-i', params.watermarkImagePath);

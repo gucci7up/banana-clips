@@ -23,6 +23,7 @@ import {
   captureLiveStreamSegmentAsync,
   computeEmbedding384,
   cosineSimilarity,
+  detectSpeakerAndEditPlanWithClaudeVisionAsync,
   ensureFixtureVideo,
   executeAiClippingJob,
   generateAssSubtitles,
@@ -3170,6 +3171,142 @@ export async function createBananaApiApp(): Promise<Express> {
       return res.status(500).json({
         error: 'COLD_OPEN_FAILED',
         message: err?.message || 'Error al aplicar el Cold Open con Claude 5.5.',
+      });
+    }
+  });
+
+  // Full AI Video Editor & Active Speaker Reframe powered by Claude 5.5 Vision + NumPy CV
+  router.post('/clips/:id/claude-edit', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const clipId = req.params.id;
+      const userInstruction = String(req.body?.instruction || '').trim();
+      const forceTwoSpeakerSplit = Boolean(req.body?.twoSpeakerSplit);
+
+      const cRes = await db.query(
+        `SELECT c.*,
+                so."localPath" as "clipLocalPath",
+                vso."localPath" as "sourceVideoLocalPath"
+         FROM "Clip" c
+         LEFT JOIN "StorageObject" so ON so.id = c."storageObjectId"
+         LEFT JOIN "Video" v ON v.id = c."videoId"
+         LEFT JOIN "StorageObject" vso ON vso.id = v."storageObjectId"
+         WHERE c.id = $1 LIMIT 1`,
+        [clipId]
+      );
+      if (cRes.rows.length === 0) return res.status(404).json({ error: 'CLIP_NOT_FOUND' });
+      const clip = cRes.rows[0];
+
+      const clipFileAbs =
+        clip.clipLocalPath && fs.existsSync(clip.clipLocalPath)
+          ? clip.clipLocalPath
+          : clip.previewPath
+            ? path.join(storageRoot, clip.previewPath)
+            : '';
+      if (!clipFileAbs || !fs.existsSync(clipFileAbs)) {
+        return res.status(404).json({ error: 'VIDEO_FILE_NOT_FOUND', message: 'No se encontró el archivo MP4 del clip.' });
+      }
+
+      const hasOriginalSource =
+        Boolean(clip.sourceVideoLocalPath) &&
+        fs.existsSync(clip.sourceVideoLocalPath) &&
+        clip.sourceVideoLocalPath !== clipFileAbs;
+
+      const inputVideoForEdit = hasOriginalSource ? clip.sourceVideoLocalPath : clipFileAbs;
+      const startSec = hasOriginalSource ? Number(clip.startSec || 0) : 0;
+      const durationSec = Number(clip.durationSec || 20);
+
+      const ctRes = await db
+        .query<{ wordsJson: any }>(`SELECT "wordsJson" FROM "ClipTranscript" WHERE "clipId" = $1 LIMIT 1`, [clipId])
+        .catch(() => ({ rows: [] as { wordsJson: any }[] }));
+      const rawWords = ctRes.rows[0]?.wordsJson;
+      const words = rawWords ? (typeof rawWords === 'string' ? JSON.parse(rawWords) : rawWords) : [];
+      const transcriptText =
+        words.length > 0
+          ? words.map((w: any) => w.word).join(' ')
+          : String(clip.summary || clip.title || '');
+
+      const plan = await detectSpeakerAndEditPlanWithClaudeVisionAsync({
+        videoPath: inputVideoForEdit,
+        startSec,
+        durationSec,
+        transcriptText,
+        userInstruction,
+      });
+
+      const selectedStyle = SUBTITLE_TEMPLATES.Hormozi || SUBTITLE_TEMPLATES.Bold;
+      let subtitleAssPath: string | undefined;
+      if (hasOriginalSource && words.length > 0) {
+        const assContent = generateAssSubtitles(words, selectedStyle, 720, 1280, {
+          autoEmojis: true,
+          hookBannerText: plan.hookBannerText || undefined,
+          hookStyle: 'Classic',
+          hookAnimation: 'POP_BOUNCE',
+          ctaOutroText: plan.debateCtaQuestion || undefined,
+          clipDurationSec: durationSec,
+        });
+        subtitleAssPath = path.join(storageRoot, 'banana-clips', `claude_sub_${clipId}.ass`);
+        fs.writeFileSync(subtitleAssPath, assContent, 'utf-8');
+      }
+
+      const tmpEditedAbs = `${clipFileAbs}.claude_edit.mp4`;
+      const effectiveReframe =
+        forceTwoSpeakerSplit || plan.twoSpeakersSplitRecommended
+          ? 'LEVEL_3_SMART_SPLIT_COMPOSITION'
+          : 'LEVEL_2_VISUAL_TRACKING';
+
+      const renderedMeta = renderClipWithFfmpeg({
+        sourceVideoPath: inputVideoForEdit,
+        outputVideoPath: tmpEditedAbs,
+        startSec,
+        durationSec,
+        aspectRatio: (clip.aspectRatio as any) || '9:16',
+        resolution: '720p',
+        reframeMode: effectiveReframe,
+        speakerFirstHalfX: plan.firstHalfX,
+        speakerSecondHalfX: plan.secondHalfX,
+        subtitleAssPath,
+        videoEffect: plan.videoEffect,
+        audioEnhancer: true,
+        autoZoom: plan.videoEffect === 'DYNAMIC_ZOOM',
+        autoTransitions: true,
+        autoColorCorrection: true,
+        splitScreenMode: plan.splitScreenMode,
+        backgroundMusicTrack: plan.backgroundMusicTrack,
+        storageDir: storageRoot,
+      });
+
+      if (fs.existsSync(tmpEditedAbs) && fs.statSync(tmpEditedAbs).size > 4000) {
+        fs.copyFileSync(tmpEditedAbs, clipFileAbs);
+        try {
+          fs.unlinkSync(tmpEditedAbs);
+        } catch {}
+      }
+
+      await db.query(
+        `UPDATE "Clip" SET "durationSec" = $1, summary = $2 WHERE id = $3`,
+        [
+          renderedMeta.durationSeconds,
+          `🎬 Editado por Claude 5.5 Vision: ${plan.explanationEs}`,
+          clipId,
+        ]
+      );
+
+      const signedUrl = clip.storageObjectId
+        ? `${signStorageObjectUrl({ storageObjectId: clip.storageObjectId, userId: clip.userId }).url}&t=${Date.now()}`
+        : null;
+
+      return res.json({
+        ok: true,
+        clipId,
+        aiEngine: 'Claude Haiku 5.5 Vision + Active Speaker CV',
+        plan,
+        signedDownloadUrl: signedUrl,
+        message: `✅ Claude 5.5 Vision editó el video y bloqueó la cámara en el hablante activo (X1=${Math.round(plan.firstHalfX * 100)}%, X2=${Math.round(plan.secondHalfX * 100)}%): ${plan.explanationEs}`,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'CLAUDE_EDIT_FAILED',
+        message: err?.message || 'Error al editar el clip con Claude 5.5 Vision.',
       });
     }
   });
