@@ -14,6 +14,33 @@ export default function MediaLibraryPage() {
   const [montages, setMontages] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [minScore, setMinScore] = useState<number>(0);
+  const [notice, setNotice] = useState<string>('');
+
+  const handleDubClip = async (clipId: string) => {
+    setNotice('🗣️ Aplicando Doblaje Neuronal IA al Español con Audio Ducking...');
+    try {
+      const res = await apiFetch<{ message: string }>(`/clips/${clipId}/dub`, {
+        method: 'POST',
+        body: JSON.stringify({ targetLang: 'ES_LATAM' }),
+      });
+      setNotice(res.message || '✅ Clip doblado al español.');
+    } catch (err: any) {
+      setNotice(`⚠️ ${err?.message || 'Error al doblar clip'}`);
+    }
+  };
+
+  const handleTelegramClip = async (clipId: string) => {
+    setNotice('📱 Enviando video MP4 + Copy Viral a tu Bot de Telegram...');
+    try {
+      const res = await apiFetch<{ message: string }>('/social/telegram-send', {
+        method: 'POST',
+        body: JSON.stringify({ clipId }),
+      });
+      setNotice(res.message || '✅ Enviado a Telegram.');
+    } catch (err: any) {
+      setNotice(`⚠️ ${err?.message || 'Configura tu Bot Token en Publicación Social → Automatizaciones'}`);
+    }
+  };
 
   useEffect(() => {
     Promise.all([
@@ -104,6 +131,12 @@ export default function MediaLibraryPage() {
         ))}
       </div>
 
+      {notice && (
+        <div className="rounded-xl border border-[#FFD43B]/40 bg-[#FFD43B]/10 px-4 py-2.5 text-xs font-bold text-[#FFD43B]">
+          {notice}
+        </div>
+      )}
+
       {/* Clips Section */}
       {(tab === 'ALL' || tab === 'CLIPS') && (
         <div className="space-y-3">
@@ -138,29 +171,53 @@ export default function MediaLibraryPage() {
                   <p className="mt-1 text-xs text-[#94A3B8] line-clamp-2">{c.explanation || c.summary}</p>
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3 text-xs">
-                  <Link
-                    href={`/editor?clipId=${c.id}`}
-                    className="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-white hover:border-[#FFD43B]"
-                  >
-                    <Edit3 className="h-3.5 w-3.5" /> Editar
-                  </Link>
-                  <a
-                    href={`/api/v1/clips/${c.id}/xml`}
-                    download={`${c.title}.xml`}
-                    className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 font-semibold text-[#FFD43B] hover:border-[#FFD43B]"
-                  >
-                    <Download className="h-3.5 w-3.5" /> XML
-                  </a>
-                  {c.signedDownloadUrl && (
+                <div className="mt-4 space-y-2 border-t border-slate-800 pt-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <a
-                      href={c.signedDownloadUrl}
-                      download={`${c.title}.mp4`}
-                      className="flex items-center gap-1 rounded-lg bg-[#FFD43B] px-3 py-1.5 font-bold text-[#111318]"
+                      href={`/api/v1/clips/${c.id}/thumbnail?download=1&regenerate=1`}
+                      className="rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:border-[#FFD43B] hover:text-[#FFD43B]"
                     >
-                      <Download className="h-3.5 w-3.5" /> Descargar MP4
+                      🖼️ Portada Viral
                     </a>
-                  )}
+                    <button
+                      type="button"
+                      onClick={() => handleDubClip(c.id)}
+                      className="rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/25"
+                    >
+                      🗣️ Doblar ES
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTelegramClip(c.id)}
+                      className="rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/25"
+                    >
+                      📱 Telegram
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Link
+                      href={`/editor?clipId=${c.id}`}
+                      className="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-white hover:border-[#FFD43B]"
+                    >
+                      <Edit3 className="h-3.5 w-3.5" /> Editar
+                    </Link>
+                    <a
+                      href={`/api/v1/clips/${c.id}/xml`}
+                      download={`${c.title}.xml`}
+                      className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 font-semibold text-[#FFD43B] hover:border-[#FFD43B]"
+                    >
+                      <Download className="h-3.5 w-3.5" /> XML
+                    </a>
+                    {c.signedDownloadUrl && (
+                      <a
+                        href={c.signedDownloadUrl}
+                        download={`${c.title}.mp4`}
+                        className="flex items-center gap-1 rounded-lg bg-[#FFD43B] px-3 py-1.5 font-bold text-[#111318]"
+                      >
+                        <Download className="h-3.5 w-3.5" /> Descargar MP4
+                      </a>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}

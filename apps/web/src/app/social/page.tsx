@@ -44,10 +44,27 @@ export default function SocialPublishingPage() {
   const [sendingWebhook, setSendingWebhook] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // Feature 5: Telegram Bot Direct Push
+  const [tgBotToken, setTgBotToken] = useState('');
+  const [tgChatId, setTgChatId] = useState('');
+  const [tgAutoSendLive, setTgAutoSendLive] = useState(true);
+  const [savingTg, setSavingTg] = useState(false);
+  const [sendingTg, setSendingTg] = useState(false);
+
+  // Feature 6: 24/7 Auto-Channel Watcher
+  const [watchedChannels, setWatchedChannels] = useState<any[]>([]);
+  const [newChannelUrl, setNewChannelUrl] = useState('https://www.youtube.com/@FoxNews/streams');
+  const [newChannelName, setNewChannelName] = useState('Fox News Live');
+  const [newChannelSplitMode, setNewChannelSplitMode] = useState('NONE');
+  const [newChannelDubLang, setNewChannelDubLang] = useState('NONE');
+  const [scanningWatcher, setScanningWatcher] = useState(false);
+
   const loadAll = async () => {
-    const [socRes, clipRes] = await Promise.all([
+    const [socRes, clipRes, tgRes, chRes] = await Promise.all([
       apiFetch('/social'),
       apiFetch<{ clips: any[] }>('/clips'),
+      apiFetch<{ config: any }>('/social/telegram-config').catch(() => ({ config: null })),
+      apiFetch<{ channels: any[] }>('/channel-watcher').catch(() => ({ channels: [] })),
     ]);
     setData(socRes || { accounts: [], posts: [] });
     const clipList = clipRes?.clips || [];
@@ -55,6 +72,12 @@ export default function SocialPublishingPage() {
     if (!selectedClipId && clipList.length > 0) {
       setSelectedClipId(clipList[0].id);
     }
+    if (tgRes?.config) {
+      setTgBotToken(tgRes.config.botToken || '');
+      setTgChatId(tgRes.config.chatId || '');
+      setTgAutoSendLive(tgRes.config.autoSendLiveClips !== false);
+    }
+    setWatchedChannels(chRes?.channels || []);
   };
 
   useEffect(() => {
@@ -163,6 +186,90 @@ export default function SocialPublishingPage() {
       setNotice(err.message || 'Error al enviar Webhook');
     } finally {
       setSendingWebhook(false);
+    }
+  };
+
+  const handleSaveTelegramConfig = async () => {
+    setSavingTg(true);
+    try {
+      const res = await apiFetch<{ message: string }>('/social/telegram-config', {
+        method: 'POST',
+        body: JSON.stringify({
+          botToken: tgBotToken,
+          chatId: tgChatId,
+          autoSendLiveClips: tgAutoSendLive,
+        }),
+      });
+      setNotice(res.message || '✅ Configuración de Bot de Telegram guardada.');
+    } catch (err: any) {
+      setNotice(err.message || 'Error al guardar Bot de Telegram');
+    } finally {
+      setSavingTg(false);
+    }
+  };
+
+  const handleSendTelegramNow = async () => {
+    setSendingTg(true);
+    try {
+      const res = await apiFetch<{ message: string }>('/social/telegram-send', {
+        method: 'POST',
+        body: JSON.stringify({
+          clipId: selectedClipId || undefined,
+          botToken: tgBotToken,
+          chatId: tgChatId,
+        }),
+      });
+      setNotice(res.message);
+    } catch (err: any) {
+      setNotice(err.message || 'Error al enviar clip a Telegram');
+    } finally {
+      setSendingTg(false);
+    }
+  };
+
+  const handleAddWatchedChannel = async () => {
+    if (!newChannelUrl.trim()) return;
+    try {
+      const res = await apiFetch<{ channels: any[] }>('/channel-watcher', {
+        method: 'POST',
+        body: JSON.stringify({
+          channelUrl: newChannelUrl.trim(),
+          channelName: newChannelName.trim() || 'Canal de YouTube',
+          checkIntervalMin: 15,
+          clipDurationSec: 20,
+          splitScreenMode: newChannelSplitMode,
+          voiceDubbingLang: newChannelDubLang,
+        }),
+      });
+      setWatchedChannels(res.channels || []);
+      setNotice('📡 Canal agregado al Vigilante Automático 24/7.');
+    } catch (err: any) {
+      setNotice(err.message || 'Error al agregar canal');
+    }
+  };
+
+  const handleDeleteWatchedChannel = async (id: string) => {
+    try {
+      const res = await apiFetch<{ channels: any[] }>(`/channel-watcher/${id}`, {
+        method: 'DELETE',
+      });
+      setWatchedChannels(res.channels || []);
+    } catch {}
+  };
+
+  const handleScanChannelNow = async (channelId?: string) => {
+    setScanningWatcher(true);
+    try {
+      const res = await apiFetch<{ message: string; channels: any[] }>('/channel-watcher/scan-now', {
+        method: 'POST',
+        body: JSON.stringify({ channelId }),
+      });
+      setWatchedChannels(res.channels || []);
+      setNotice(res.message);
+    } catch (err: any) {
+      setNotice(err.message || 'Error al escanear canal');
+    } finally {
+      setScanningWatcher(false);
     }
   };
 
@@ -588,9 +695,207 @@ export default function SocialPublishingPage() {
         </div>
       )}
 
-      {/* TAB 3: AUTOMATIONS, WEBHOOKS (n8n / Make) & BULK CSV */}
+      {/* TAB 3: AUTOMATIONS, TELEGRAM BOT, 24/7 CHANNEL WATCHER, WEBHOOKS & BULK CSV */}
       {activeTab === 'AUTOMATIONS' && (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          {/* Card 1: Telegram Bot Direct Push */}
+          <div className="studio-card p-5 space-y-4 border border-sky-500/30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="rounded-xl bg-sky-500/15 p-2.5 text-sky-400">
+                  <Send className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-extrabold text-white">
+                    📱 Bot de Telegram Directo (Del Servidor a tu Celular)
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Recibe cada Short MP4 + Copy Viral + Hashtags directo en tu Telegram listo para subir en 1 toque
+                  </p>
+                </div>
+              </div>
+              <span className="rounded-full bg-sky-500/20 px-2.5 py-0.5 text-[10px] font-black text-sky-300">
+                1-CLIC PUSH
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300">Telegram Bot Token (@BotFather)</label>
+                <input
+                  type="password"
+                  value={tgBotToken}
+                  onChange={(e) => setTgBotToken(e.target.value)}
+                  placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0B0D12] p-2.5 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300">Chat ID o @Canal</label>
+                <input
+                  type="text"
+                  value={tgChatId}
+                  onChange={(e) => setTgChatId(e.target.value)}
+                  placeholder="Ej. 987654321 o @micanalviral"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0B0D12] p-2.5 text-xs text-white"
+                />
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-xs font-semibold text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={tgAutoSendLive}
+                onChange={(e) => setTgAutoSendLive(e.target.checked)}
+                className="h-4 w-4 rounded accent-[#FFD43B]"
+              />
+              Auto-Enviar automáticamente cada nuevo Mejor Momento de Live Clipper a mi Telegram
+            </label>
+
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={handleSaveTelegramConfig}
+                disabled={savingTg}
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-sky-400/50 bg-sky-500/15 py-2.5 text-xs font-bold text-sky-300 hover:bg-sky-500/25 disabled:opacity-40"
+              >
+                💾 Guardar Configuración Telegram
+              </button>
+              <button
+                type="button"
+                onClick={handleSendTelegramNow}
+                disabled={sendingTg}
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-[#FFD43B] py-2.5 text-xs font-black text-[#0B0D12] hover:brightness-105 disabled:opacity-40"
+              >
+                <Send className="h-3.5 w-3.5" /> 📱 Enviar Clip Actual a Telegram Ahora
+              </button>
+            </div>
+          </div>
+
+          {/* Card 2: 24/7 Auto-Channel Watcher */}
+          <div className="studio-card p-5 space-y-4 border border-amber-500/30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="rounded-xl bg-[#FFD43B]/15 p-2.5 text-[#FFD43B]">
+                  <Zap className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-extrabold text-white">
+                    📡 Vigilante Automático de Canales 24/7 (Auto-Watcher)
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Monitorea canales de YouTube/Twitch y extrae los Mejores Momentos apenas detecta video o directo nuevo
+                  </p>
+                </div>
+              </div>
+              <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[10px] font-black text-emerald-300">
+                24/7 ACTIVO
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-300">URL del Canal o Directo</label>
+                <input
+                  type="url"
+                  value={newChannelUrl}
+                  onChange={(e) => setNewChannelUrl(e.target.value)}
+                  placeholder="https://www.youtube.com/@Canal/streams"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0B0D12] p-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-300">Nombre del Canal</label>
+                <input
+                  type="text"
+                  value={newChannelName}
+                  onChange={(e) => setNewChannelName(e.target.value)}
+                  placeholder="Ej. Canal Noticias / Streamer"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0B0D12] p-2 text-xs text-white"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400">🎮 Pantalla Dividida 50/50</label>
+                <select
+                  value={newChannelSplitMode}
+                  onChange={(e) => setNewChannelSplitMode(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0B0D12] p-2 text-[11px] font-bold text-white"
+                >
+                  <option value="NONE">9:16 Normal</option>
+                  <option value="HYPNOTIC_TUNNEL">🌀 Túnel Hipnótico 50/50</option>
+                  <option value="NEON_RAMP">🌈 Rampa Neón 50/50</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-400">🗣️ Auto-Doblaje IA</label>
+                <select
+                  value={newChannelDubLang}
+                  onChange={(e) => setNewChannelDubLang(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#0B0D12] p-2 text-[11px] font-bold text-white"
+                >
+                  <option value="NONE">Voz Original</option>
+                  <option value="ES_LATAM">🇲🇽 Español LatAm</option>
+                  <option value="EN_US">🇺🇸 Inglés</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={handleAddWatchedChannel}
+                className="rounded-xl border border-[#FFD43B] bg-[#FFD43B]/15 py-2 text-xs font-bold text-[#FFD43B] hover:bg-[#FFD43B] hover:text-black transition"
+              >
+                ➕ Agregar Canal al Vigilante
+              </button>
+              <button
+                type="button"
+                onClick={() => handleScanChannelNow()}
+                disabled={scanningWatcher || watchedChannels.length === 0}
+                className="rounded-xl bg-emerald-500 py-2 text-xs font-black text-slate-950 hover:bg-emerald-400 disabled:opacity-40"
+              >
+                {scanningWatcher ? 'Escaneando...' : '⚡ Escanear Canal y Sacar Cortes Ahora'}
+              </button>
+            </div>
+
+            {watchedChannels.length > 0 && (
+              <div className="space-y-1.5 max-h-36 overflow-y-auto pt-1">
+                {watchedChannels.map((ch: any) => (
+                  <div
+                    key={ch.id}
+                    className="flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-[#0B0D12] px-3 py-2 text-[11px]"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-bold text-white">{ch.channelName}</div>
+                      <div className="truncate text-slate-400">
+                        {ch.lastDetectedTitle ? `Último: ${ch.lastDetectedTitle}` : ch.channelUrl}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleScanChannelNow(ch.id)}
+                        className="rounded bg-[#FFD43B] px-2 py-1 text-[10px] font-black text-black"
+                      >
+                        Escanear
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteWatchedChannel(ch.id)}
+                        className="rounded bg-red-500/20 px-2 py-1 text-[10px] font-bold text-red-400"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="studio-card p-5 space-y-4">
             <div className="flex items-center gap-2.5">
               <div className="rounded-xl bg-[#FFD43B]/15 p-2.5 text-[#FFD43B]">

@@ -5,6 +5,7 @@ import { getDb, type DatabaseEngine } from '@banana/database';
 import { calculateMultimodalClipScore, SUBTITLE_TEMPLATES } from '@banana/shared';
 import type { AspectRatio, JobState, SubtitleTemplateName, WordTimestamp } from '@banana/video-types';
 import {
+  applyVoiceDubbingToClipAsync,
   buildSrtAndVttFromWords,
   downloadVideoFromExternalUrlAsync,
   extractRealSubtitlesIfPresent,
@@ -15,7 +16,10 @@ import {
   renderClipWithFfmpeg,
   transcribeVideoWithFasterWhisperAsync,
   translateTextToTargetLang,
+  type SplitScreenRetentionMode,
   type VideoEffectPreset,
+  type ViralMusicTrackId,
+  type VoiceDubbingLang,
   type WatermarkPosition,
 } from './pipeline-engine';
 
@@ -321,7 +325,11 @@ export async function executeAiClippingJob(jobId: string): Promise<{
     const captionTranslation: boolean = Boolean(config.captionTranslation);
     const targetLanguage: string = config.targetLanguage || 'English';
     const voiceDubbing: boolean = Boolean(config.voiceDubbing);
-    const dubbingLanguage: string = config.dubbingLanguage || 'English';
+    const dubbingLanguage: string = config.dubbingLanguage || 'ES_LATAM';
+    const splitScreenMode: SplitScreenRetentionMode =
+      (config.splitScreenMode as SplitScreenRetentionMode) || 'NONE';
+    const backgroundMusicTrack: ViralMusicTrackId =
+      (config.backgroundMusicTrack as ViralMusicTrackId) || 'NONE';
     const rangeStartSec: number = Math.max(0, Number(config.rangeStartSec || 0));
     const rangeEndSec: number = Number(config.rangeEndSec || 0);
     const momentsPrompt: string = String(config.momentsPrompt || '').trim();
@@ -808,10 +816,35 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         watermarkImagePath: motionGraphics && watermarkImagePath ? watermarkImagePath : undefined,
         watermarkPosition,
         watermarkScalePx,
+        splitScreenMode,
+        backgroundMusicTrack,
+        storageDir: storageRoot,
       });
 
-      // Capture viral thumbnail at 1.2s so the burned-in Hook Banner + Subtitles appear on the cover
-      generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(1.2, durationSec / 2));
+      if (voiceDubbing && dubbingLanguage && dubbingLanguage !== 'NONE') {
+        const mappedDubLang: VoiceDubbingLang =
+          dubbingLanguage.toUpperCase().includes('SPAIN') || dubbingLanguage.toUpperCase() === 'ES_SPAIN'
+            ? 'ES_SPAIN'
+            : dubbingLanguage.toUpperCase().includes('PT')
+              ? 'PT_BR'
+              : dubbingLanguage.toUpperCase().includes('EN')
+                ? 'EN_US'
+                : 'ES_LATAM';
+        await applyVoiceDubbingToClipAsync({
+          videoPath: clipFileAbs,
+          transcriptText: cand.text,
+          targetLang: mappedDubLang,
+        });
+      }
+
+      // Capture viral thumbnail at 1.2s with high-contrast headline & score badge stamped on the cover
+      generateThumbnailFfmpeg(
+        clipFileAbs,
+        thumbFileAbs,
+        Math.min(1.2, durationSec / 2),
+        cleanHeadline,
+        quality.score_total
+      );
 
       const storageObjId = crypto.randomUUID();
       await db.query(

@@ -175,16 +175,18 @@ export default function AiClippingPage() {
   const [autoBroll, setAutoBroll] = useState<boolean>(true);
   const [brollMode, setBrollMode] = useState<string>('AI video B-roll');
 
-  // Sound sharp: Speech cleanup, Enhance audio, Auto SFX
+  // Sound sharp: Speech cleanup, Enhance audio, Auto SFX, Viral Background Music
   const [speechCleanup, setSpeechCleanup] = useState<boolean>(true);
   const [speechCleanupMode, setSpeechCleanupMode] = useState<string>('Remove pause & filler words');
   const [audioEnhancer, setAudioEnhancer] = useState<boolean>(true);
   const [autoSfx, setAutoSfx] = useState<boolean>(true);
+  const [backgroundMusicTrack, setBackgroundMusicTrack] = useState<string>('NONE');
 
-  // Look good: Auto Zoom, Auto transitions, Auto Color Correction
+  // Look good: Auto Zoom, Auto transitions, Auto Color Correction, Split Screen 50/50
   const [autoZoom, setAutoZoom] = useState<boolean>(true);
   const [autoTransitions, setAutoTransitions] = useState<boolean>(true);
   const [autoColorCorrection, setAutoColorCorrection] = useState<boolean>(true);
+  const [splitScreenMode, setSplitScreenMode] = useState<string>('NONE');
   const [ctaOutro, setCtaOutro] = useState<boolean>(false);
 
   // Translate: Voice dubbing & Caption translation
@@ -316,9 +318,11 @@ export default function AiClippingPage() {
           speechCleanup,
           audioEnhancer,
           autoSfx,
+          backgroundMusicTrack,
           autoZoom,
           autoTransitions,
           autoColorCorrection,
+          splitScreenMode,
           brandWatermarkText: brandKitMode === 'NONE' ? '' : brandWatermarkText,
           ctaOutro,
           voiceDubbing,
@@ -1206,16 +1210,58 @@ export default function AiClippingPage() {
                   <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#27272D] text-zinc-300">
                     <Sparkles className="h-4 w-4" />
                   </div>
-                  <span className="text-sm font-bold text-white">Auto SFX</span>
+                  <span className="text-sm font-bold text-white">Auto SFX & B-Roll Callouts</span>
                   <span className="text-xs text-[#FFD43B]">👑</span>
                 </div>
                 <OpusSwitch checked={autoSfx} onChange={setAutoSfx} />
+              </div>
+
+              {/* Viral Background Music with Auto-Ducking */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#27272D] text-[#FFD43B]">
+                    🎵
+                  </div>
+                  <span className="text-sm font-bold text-white">Música Viral (Auto-Ducking)</span>
+                </div>
+                <select
+                  value={backgroundMusicTrack}
+                  onChange={(e) => setBackgroundMusicTrack(e.target.value)}
+                  className="rounded-lg border border-zinc-700 bg-[#18181B] px-2.5 py-1.5 text-xs font-bold text-[#FFD43B]"
+                >
+                  <option value="NONE">Sin Música</option>
+                  <option value="BREAKING_TENSION">🚨 Breaking Tension</option>
+                  <option value="PHONK_DRIFT">🔥 Phonk Drift</option>
+                  <option value="EPIC_CINEMA">🎬 Épico Cine</option>
+                  <option value="COMEDY_BOUNCE">😂 Comedia</option>
+                  <option value="LOFI_CHILL">☕ Lo-Fi Chill</option>
+                </select>
               </div>
             </div>
 
             {/* LOOK GOOD SECTION */}
             <div className="space-y-5 border-b border-zinc-800 pb-6">
               <div className="text-xs font-semibold text-zinc-400">Look good</div>
+
+              {/* Split-Screen 50/50 Hypnotic Retention */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#27272D] text-[#FFD43B]">
+                    🎮
+                  </div>
+                  <span className="text-sm font-bold text-white">Pantalla Dividida 50/50 (Retención)</span>
+                </div>
+                <select
+                  value={splitScreenMode}
+                  onChange={(e) => setSplitScreenMode(e.target.value)}
+                  className="rounded-lg border border-zinc-700 bg-[#18181B] px-2.5 py-1.5 text-xs font-bold text-[#FFD43B]"
+                >
+                  <option value="NONE">9:16 Normal</option>
+                  <option value="HYPNOTIC_TUNNEL">🌀 Túnel Hipnótico 50/50</option>
+                  <option value="NEON_RAMP">🌈 Rampa Neón 50/50</option>
+                  <option value="GAMEPLAY_PARKOUR">🕹️ Arcade Loop 50/50</option>
+                </select>
+              </div>
 
               {/* Auto Zoom */}
               <div className="flex items-center justify-between">

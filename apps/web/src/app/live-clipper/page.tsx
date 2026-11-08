@@ -25,6 +25,11 @@ export default function LiveClipperPage() {
   const [clipDurationSec, setClipDurationSec] = useState<number>(20);
   const [intervalSec, setIntervalSec] = useState<number>(600);
   const [autoCutEnabled, setAutoCutEnabled] = useState<boolean>(true);
+  const [splitScreenMode, setSplitScreenMode] = useState<string>('NONE');
+  const [backgroundMusicTrack, setBackgroundMusicTrack] = useState<string>('NONE');
+  const [voiceDubbingLang, setVoiceDubbingLang] = useState<string>('NONE');
+  const [actionNotice, setActionNotice] = useState<string>('');
+  const [busyClipId, setBusyClipId] = useState<string | null>(null);
 
   const [liveState, setLiveState] = useState<'IDLE' | 'CONNECTING' | 'RECORDING' | 'PROCESSING' | 'STOPPED' | 'FAILED'>('IDLE');
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
@@ -69,6 +74,9 @@ export default function LiveClipperPage() {
           clipDurationSec,
           intervalSec,
           autoCutEnabled,
+          splitScreenMode,
+          backgroundMusicTrack,
+          voiceDubbingLang,
         }),
       });
       setActiveVideoId(res.videoId);
@@ -76,6 +84,39 @@ export default function LiveClipperPage() {
       await loadSessions();
     } catch {
       setLiveState('FAILED');
+    }
+  };
+
+  const handleDubLiveClip = async (clipId: string) => {
+    setBusyClipId(clipId);
+    setActionNotice('🗣️ Aplicando Doblaje Neuronal IA al Español con Audio Ducking...');
+    try {
+      const res = await apiFetch<{ message: string }>(`/clips/${clipId}/dub`, {
+        method: 'POST',
+        body: JSON.stringify({ targetLang: 'ES_LATAM' }),
+      });
+      setActionNotice(res.message || '✅ Clip doblado al español con éxito.');
+      await loadSessions();
+    } catch (err: any) {
+      setActionNotice(`⚠️ ${err?.message || 'Error al doblar el clip.'}`);
+    } finally {
+      setBusyClipId(null);
+    }
+  };
+
+  const handleSendToTelegram = async (clipId: string) => {
+    setBusyClipId(clipId);
+    setActionNotice('📱 Enviando video MP4 + Copy Viral a tu Bot de Telegram...');
+    try {
+      const res = await apiFetch<{ message: string }>('/social/telegram-send', {
+        method: 'POST',
+        body: JSON.stringify({ clipId }),
+      });
+      setActionNotice(res.message || '✅ Enviado a tu Telegram.');
+    } catch (err: any) {
+      setActionNotice(`⚠️ ${err?.message || 'Configura tu Bot Token en Publicación Social → Automatizaciones.'}`);
+    } finally {
+      setBusyClipId(null);
     }
   };
 
@@ -208,6 +249,57 @@ export default function LiveClipperPage() {
             </div>
           </div>
 
+          {/* Viral Booster Options: Split Screen 50/50, Background Music & AI Dubbing */}
+          <div className="rounded-xl border border-[#FFD43B]/25 bg-[#0B0D12]/90 p-3 space-y-2.5">
+            <div className="text-[11px] font-extrabold uppercase tracking-wider text-[#FFD43B]">
+              🚀 Potenciadores Virales Automáticos (Retención, Música y Doblaje IA)
+            </div>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400">🎮 Pantalla Dividida 50/50</label>
+                <select
+                  value={splitScreenMode}
+                  onChange={(e) => setSplitScreenMode(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#111318] p-2 text-[11px] font-bold text-white"
+                >
+                  <option value="NONE">9:16 Completo (Normal)</option>
+                  <option value="HYPNOTIC_TUNNEL">🌀 Túnel Hipnótico 50/50</option>
+                  <option value="NEON_RAMP">🌈 Rampa Neón 50/50</option>
+                  <option value="GAMEPLAY_PARKOUR">🕹️ Arcade Loop 50/50</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400">🎵 Música Viral (Auto-Ducking)</label>
+                <select
+                  value={backgroundMusicTrack}
+                  onChange={(e) => setBackgroundMusicTrack(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#111318] p-2 text-[11px] font-bold text-white"
+                >
+                  <option value="NONE">Sin Música de Fondo</option>
+                  <option value="BREAKING_TENSION">🚨 Tensión / Breaking News</option>
+                  <option value="PHONK_DRIFT">🔥 Phonk Drift Viral</option>
+                  <option value="EPIC_CINEMA">🎬 Épico Cinematográfico</option>
+                  <option value="COMEDY_BOUNCE">😂 Comedia / Dinámico</option>
+                  <option value="LOFI_CHILL">☕ Lo-Fi Chill Podcast</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400">🗣️ Doblaje Voz IA (Ducking)</label>
+                <select
+                  value={voiceDubbingLang}
+                  onChange={(e) => setVoiceDubbingLang(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#111318] p-2 text-[11px] font-bold text-white"
+                >
+                  <option value="NONE">Idioma Original</option>
+                  <option value="ES_LATAM">🇲🇽 Doblar a Español LatAm</option>
+                  <option value="ES_SPAIN">🇪🇸 Doblar a Español España</option>
+                  <option value="EN_US">🇺🇸 Doblar a Inglés</option>
+                  <option value="PT_BR">🇧🇷 Doblar a Portugués</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-2.5 pt-2">
             <button
               type="button"
@@ -308,6 +400,12 @@ export default function LiveClipperPage() {
             </div>
           </div>
 
+          {actionNotice && (
+            <div className="rounded-xl border border-[#FFD43B]/40 bg-[#FFD43B]/10 px-3.5 py-2.5 text-xs font-bold text-[#FFD43B]">
+              {actionNotice}
+            </div>
+          )}
+
           {liveClips.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-[#111318] py-16 px-6 text-center">
               <Scissors className="h-10 w-10 text-[#FFD43B] mb-3 opacity-80" />
@@ -350,22 +448,52 @@ export default function LiveClipperPage() {
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 border-t border-slate-800 pt-3 text-xs">
-                    <Link
-                      href={`/editor?clipId=${c.id}`}
-                      className="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-white hover:border-[#FFD43B]"
-                    >
-                      <Edit3 className="h-3.5 w-3.5" /> Editar
-                    </Link>
-                    {c.signedDownloadUrl && (
+                  <div className="space-y-2 border-t border-slate-800 pt-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <a
-                        href={c.signedDownloadUrl}
-                        download={`${c.title.replace(/[^a-z0-9_-]/gi, '_')}.mp4`}
-                        className="flex items-center gap-1 rounded-lg bg-[#FFD43B] px-3 py-1.5 font-black text-[#111318]"
+                        href={`/api/v1/clips/${c.id}/thumbnail?download=1&regenerate=1`}
+                        className="rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:border-[#FFD43B] hover:text-[#FFD43B]"
+                        title="Descargar Portada / Miniatura Viral con Titular Estampado"
                       >
-                        <Download className="h-3.5 w-3.5" /> Descargar MP4
+                        🖼️ Portada Viral
                       </a>
-                    )}
+                      <button
+                        type="button"
+                        disabled={busyClipId === c.id}
+                        onClick={() => handleDubLiveClip(c.id)}
+                        className="rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-40"
+                        title="Doblar Voz al Español con IA y Audio Ducking"
+                      >
+                        🗣️ Doblar ES
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyClipId === c.id}
+                        onClick={() => handleSendToTelegram(c.id)}
+                        className="rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/25 disabled:opacity-40"
+                        title="Enviar MP4 + Copy Viral a tu Bot de Telegram"
+                      >
+                        📱 Telegram
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <Link
+                        href={`/editor?clipId=${c.id}`}
+                        className="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-white hover:border-[#FFD43B]"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" /> Editar
+                      </Link>
+                      {c.signedDownloadUrl && (
+                        <a
+                          href={c.signedDownloadUrl}
+                          download={`${c.title.replace(/[^a-z0-9_-]/gi, '_')}.mp4`}
+                          className="flex items-center gap-1 rounded-lg bg-[#FFD43B] px-3 py-1.5 font-black text-[#111318]"
+                        >
+                          <Download className="h-3.5 w-3.5" /> Descargar MP4
+                        </a>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}

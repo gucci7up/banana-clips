@@ -201,14 +201,59 @@ export function probeMediaWithFfprobe(filePath: string): MediaProbeResult {
 }
 
 /**
- * Generates an automatic JPEG thumbnail from a video at a specified timestamp using FFmpeg.
+ * Generates an automatic JPEG thumbnail from a video at a specified timestamp using FFmpeg,
+ * stamping a high-CTR Viral Cover Banner & Score Badge when headline text is provided.
  */
 export function generateThumbnailFfmpeg(
   videoPath: string,
   outputPath: string,
-  timestampSec: number = 1.0
+  timestampSec: number = 1.0,
+  viralHeadline?: string,
+  scoreTotal?: number
 ): string {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  const fontFile = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+  const hasLinuxFont = fs.existsSync(fontFile);
+
+  if (hasLinuxFont && viralHeadline) {
+    const safeHeadline = viralHeadline
+      .replace(/['":\\[\]%]/g, '')
+      .toUpperCase()
+      .trim()
+      .slice(0, 32);
+    const words = safeHeadline.split(/\s+/).filter(Boolean);
+    const mid = Math.ceil(words.length / 2);
+    const line1 = words.slice(0, mid).join(' ') || 'MOMENTO VIRAL';
+    const line2 = words.slice(mid).join(' ');
+    const badgeText = `VIRAL SHORT  •  SCORE ${scoreTotal ?? 95}/100`;
+
+    const vf = [
+      'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280',
+      'eq=contrast=1.14:saturation=1.22',
+      'drawbox=x=0:y=0:w=720:h=160:color=black@0.65:t=fill',
+      'drawbox=x=0:y=940:w=720:h=340:color=black@0.78:t=fill',
+      'drawbox=x=0:y=934:w=720:h=6:color=#FFD43B@0.95:t=fill',
+      `drawtext=fontfile='${fontFile}':text='${badgeText}':fontcolor=#FFD43B:fontsize=26:x=(w-text_w)/2:y=56:box=1:boxcolor=black@0.7:boxborderw=12`,
+      `drawtext=fontfile='${fontFile}':text='${line1}':fontcolor=white:fontsize=46:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1010`,
+      line2
+        ? `drawtext=fontfile='${fontFile}':text='${line2}':fontcolor=#FFD43B:fontsize=48:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1075`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(',');
+
+    try {
+      execFileSync(
+        'ffmpeg',
+        ['-y', '-ss', String(Math.max(0, timestampSec)), '-i', videoPath, '-frames:v', '1', '-vf', vf, '-q:v', '2', outputPath],
+        { stdio: 'ignore', timeout: 25000 }
+      );
+      if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 2000) {
+        return outputPath;
+      }
+    } catch {}
+  }
+
   execFileSync(
     'ffmpeg',
     [
@@ -703,6 +748,7 @@ ${hookBadgeStyleLine}
 Style: BrandWatermark,DejaVu Sans,${brandFontSize},&H30FFFFFF,&H003BD4FF,&H60000000,&H80000000,-1,0,0,0,100,100,1,0,1,2,1,9,30,36,${Math.round(playResY * 0.035)},1
 Style: CtaBanner,DejaVu Sans,${ctaFontSize},&H00FFFFFF,&H003BD4FF,&H00000000,&HD0111318,-1,0,0,0,100,100,1,0,3,4,2,8,50,50,${Math.round(playResY * 0.11)},1
 Style: MotionGraphic,DejaVu Sans,${Math.round(playResX * 0.026)},&H003BD4FF,&H00FFFFFF,&H00111318,&HC0111318,-1,0,0,0,100,100,2,0,3,4,0,2,30,30,${Math.round(playResY * 0.03)},1
+Style: BrollCallout,DejaVu Sans,${Math.round(playResX * 0.029)},&H00111318,&H00FFFFFF,&H003BD4FF,&H003BD4FF,-1,0,0,0,100,100,2,0,3,10,0,8,40,40,${Math.round(playResY * 0.27)},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -712,24 +758,24 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const events: string[] = [];
   const autoEmojis = proOptions?.autoEmojis !== false;
 
-  // Keyword & Emoji map (OpusClip Auto-Emoji + Keyword Highlighter)
-  const detectKeywordBadge = (rawWord: string): { isKeyword: boolean; badge?: string } => {
+  // Keyword & Emoji map (OpusClip Auto-Emoji + Keyword Highlighter + B-Roll Callouts)
+  const detectKeywordBadge = (rawWord: string): { isKeyword: boolean; badge?: string; calloutTitle?: string } => {
     const clean = rawWord.toLowerCase().replace(/[^a-záéíóúñü0-9]/gi, '');
     if (!clean || clean.length < 3) return { isKeyword: false };
-    if (/^(dinero|dolares|millones|inversion|negocio|rentabilizar|ventas|vending|precio|ganancia|money|dollars)/.test(clean)) {
-      return { isKeyword: true, badge: '[$$]' };
+    if (/^(dinero|dolares|millones|inversion|negocio|rentabilizar|ventas|vending|precio|ganancia|money|dollars|million|billion|economy|tariff|tax)/.test(clean)) {
+      return { isKeyword: true, badge: '[$$]', calloutTitle: '$$ IMPACTO ECONOMICO CLAVE $$' };
     }
-    if (/^(increible|epico|brutal|mejor|fuego|impactante|locura|maestra|eliminaciones|incredible|epic|better)/.test(clean)) {
-      return { isKeyword: true, badge: '★' };
+    if (/^(increible|epico|brutal|mejor|fuego|impactante|locura|maestra|eliminaciones|incredible|epic|better|great|amazing|historic|never)/.test(clean)) {
+      return { isKeyword: true, badge: '★', calloutTitle: '★ MOMENTO EPICO DETECTADO ★' };
     }
-    if (/^(inteligencia|artificial|tecnologia|futuro|algoritmo|sistema|machine|intelligence)/.test(clean)) {
-      return { isKeyword: true, badge: '⚡' };
+    if (/^(inteligencia|artificial|tecnologia|futuro|algoritmo|sistema|machine|intelligence|power|energy|world|country|america)/.test(clean)) {
+      return { isKeyword: true, badge: '⚡', calloutTitle: '⚡ DATO CLAVE EN DIRECTO ⚡' };
     }
-    if (/^(rie|risa|carcajadas|gracioso|divertido|humor|equipo|laughs|team)/.test(clean)) {
-      return { isKeyword: true, badge: '✦' };
+    if (/^(rie|risa|carcajadas|gracioso|divertido|humor|equipo|laughs|team|people|everyone)/.test(clean)) {
+      return { isKeyword: true, badge: '✦', calloutTitle: '✦ REACCION VIRAL ✦' };
     }
-    if (/^(ganar|victoria|logro|exito|celebracion|primero|primer|win|first)/.test(clean)) {
-      return { isKeyword: true, badge: '★' };
+    if (/^(ganar|victoria|logro|exito|celebracion|primero|primer|win|first|victory|deal|peace)/.test(clean)) {
+      return { isKeyword: true, badge: '★', calloutTitle: '★ PUNTO DECISIVO ★' };
     }
     return { isKeyword: false };
   };
@@ -836,7 +882,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     );
   }
 
-  // 4. Word-by-word Karaoke + Keyword Highlighter + Auto Badges
+  // 4. Word-by-word Karaoke + Keyword Highlighter + Auto Badges + Floating B-Roll Callouts
+  let lastCalloutEndSec = 3.6;
+  const cxCallout = Math.round(playResX / 2);
+  const cyCallout = Math.round(playResY * 0.27);
+
   for (let i = 0; i < words.length; i += maxPerLine) {
     const group = words.slice(i, i + maxPerLine);
     if (group.length === 0) continue;
@@ -847,6 +897,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const kw = detectKeywordBadge(gw.word);
         if (kw.badge) {
           groupBadge = ` {\\c${activeAss}}${kw.badge}{\\c${primaryAss}}`;
+          if (kw.calloutTitle && gw.start >= lastCalloutEndSec + 1.4 && gw.start < totalClipSec - 2.5) {
+            const cStart = gw.start;
+            const cEnd = Math.min(totalClipSec - 0.5, cStart + 2.1);
+            lastCalloutEndSec = cEnd;
+            events.push(
+              `Dialogue: 3,${formatAssTime(cStart)},${formatAssTime(cEnd)},BrollCallout,,0,0,0,,{\\an8\\pos(${cxCallout},${cyCallout})\\fscx20\\fscy20\\t(0,180,\\fscx114\\fscy114)\\t(180,320,\\fscx100\\fscy100)\\fad(50,220)} ${kw.calloutTitle} `
+            );
+          }
           break;
         }
       }
@@ -892,8 +950,317 @@ export type WatermarkPosition =
   | 'BOTTOM_LEFT'
   | 'BOTTOM_CENTER';
 
+export type SplitScreenRetentionMode =
+  | 'NONE'
+  | 'HYPNOTIC_TUNNEL'
+  | 'NEON_RAMP'
+  | 'GAMEPLAY_PARKOUR';
+
+export type ViralMusicTrackId =
+  | 'NONE'
+  | 'BREAKING_TENSION'
+  | 'PHONK_DRIFT'
+  | 'EPIC_CINEMA'
+  | 'COMEDY_BOUNCE'
+  | 'LOFI_CHILL';
+
+export type VoiceDubbingLang =
+  | 'NONE'
+  | 'ES_LATAM'
+  | 'ES_SPAIN'
+  | 'EN_US'
+  | 'PT_BR';
+
+/**
+ * Generates and caches a procedural 20-second 720x640 hypnotic visual retention loop (bottom 50% of 9:16)
+ * so Split-Screen Retention Mode works instantaneously without external copyright files.
+ */
+export function ensureHypnoticLoopVideo(storageDir: string, mode: SplitScreenRetentionMode): string {
+  const assetsDir = path.join(storageDir, 'assets');
+  fs.mkdirSync(assetsDir, { recursive: true });
+  const loopPath = path.join(assetsDir, `hypnotic_loop_${mode.toLowerCase()}.mp4`);
+  if (fs.existsSync(loopPath) && fs.statSync(loopPath).size > 10000) {
+    return loopPath;
+  }
+
+  let lavfiSource = `mandelbrot=s=720x640:r=30:maxiter=80`;
+  let vfFilter = `hue=H=2*PI*t/6:s=1.8,eq=contrast=1.25:brightness=0.04`;
+  if (mode === 'NEON_RAMP') {
+    lavfiSource = `gradients=s=720x640:r=30:speed=0.06:n=5`;
+    vfFilter = `eq=saturation=1.7:contrast=1.3,drawgrid=w=90:h=80:t=2:c=white@0.22`;
+  } else if (mode === 'GAMEPLAY_PARKOUR') {
+    lavfiSource = `cellauto=s=360x320:r=30:rule=110`;
+    vfFilter = `scale=720:640:flags=neighbor,hue=H=2*PI*t/5:s=2.0,eq=contrast=1.3`;
+  }
+
+  try {
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        lavfiSource,
+        '-t',
+        '20',
+        '-vf',
+        vfFilter,
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-crf',
+        '24',
+        '-pix_fmt',
+        'yuv420p',
+        loopPath,
+      ],
+      { stdio: 'ignore', timeout: 35000 }
+    );
+  } catch {
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        'mandelbrot=s=720x640:r=30',
+        '-t',
+        '20',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-pix_fmt',
+        'yuv420p',
+        loopPath,
+      ],
+      { stdio: 'ignore', timeout: 35000 }
+    );
+  }
+  return loopPath;
+}
+
+/**
+ * Generates and caches 5 copyright-free procedural background music tracks using FFmpeg aevalsrc
+ * so clips can include auto-ducked background music.
+ */
+export function ensureViralMusicTrackFile(storageDir: string, trackId: ViralMusicTrackId): string {
+  const assetsDir = path.join(storageDir, 'assets');
+  fs.mkdirSync(assetsDir, { recursive: true });
+  const trackPath = path.join(assetsDir, `bgm_${trackId.toLowerCase()}.mp3`);
+  if (fs.existsSync(trackPath) && fs.statSync(trackPath).size > 5000) {
+    return trackPath;
+  }
+
+  let expr = '0.28*sin(2*PI*110*t)*(1+0.5*sin(2*PI*2.5*t))+0.18*sin(2*PI*220*t)+0.12*sin(2*PI*330*t)';
+  if (trackId === 'PHONK_DRIFT') {
+    expr = '0.35*sin(2*PI*65*t)*(1+0.8*sin(2*PI*4*t))+0.22*sin(2*PI*196*t)+0.15*sin(2*PI*261*t)';
+  } else if (trackId === 'EPIC_CINEMA') {
+    expr = '0.32*sin(2*PI*82*t)+0.24*sin(2*PI*164*t)*(1+0.4*sin(2*PI*1.5*t))+0.18*sin(2*PI*246*t)';
+  } else if (trackId === 'COMEDY_BOUNCE') {
+    expr = '0.28*sin(2*PI*261*t)*(1+0.7*sin(2*PI*5*t))+0.20*sin(2*PI*329*t)+0.18*sin(2*PI*392*t)';
+  } else if (trackId === 'LOFI_CHILL') {
+    expr = '0.25*sin(2*PI*146*t)+0.20*sin(2*PI*220*t)*(1+0.3*sin(2*PI*1.2*t))+0.15*sin(2*PI*293*t)';
+  }
+
+  execFileSync(
+    'ffmpeg',
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      `aevalsrc='${expr}':s=44100:d=45`,
+      '-af',
+      'lowpass=f=1800,aecho=0.8:0.88:60:0.4',
+      '-c:a',
+      'libmp3lame',
+      '-b:a',
+      '128k',
+      trackPath,
+    ],
+    { stdio: 'ignore', timeout: 25000 }
+  );
+  return trackPath;
+}
+
+/**
+ * Mixes a background music track into a rendered MP4 clip at ducked volume (15%) while preserving 100% of video quality (-c:v copy).
+ */
+export function mixBackgroundMusicWithAutoDucking(videoPath: string, musicPath: string): void {
+  if (!fs.existsSync(videoPath) || !fs.existsSync(musicPath)) return;
+  const tmpOut = `${videoPath}.bgm.mp4`;
+  try {
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',
+        videoPath,
+        '-stream_loop',
+        '-1',
+        '-i',
+        musicPath,
+        '-filter_complex',
+        '[0:a]volume=1.0[voice];[1:a]volume=0.15,afade=t=in:st=0:d=0.6[bgm];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]',
+        '-map',
+        '0:v',
+        '-map',
+        '[aout]',
+        '-c:v',
+        'copy',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+        '-movflags',
+        '+faststart',
+        tmpOut,
+      ],
+      { stdio: 'ignore', timeout: 35000 }
+    );
+    if (fs.existsSync(tmpOut) && fs.statSync(tmpOut).size > 5000) {
+      fs.renameSync(tmpOut, videoPath);
+    }
+  } catch {
+    if (fs.existsSync(tmpOut)) {
+      try {
+        fs.unlinkSync(tmpOut);
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Translates a clip's transcript into target language via NVIDIA NIM LLM (or deterministic fallback),
+ * synthesizes Neural TTS via edge-tts, and mixes it over the original video with Audio Ducking (original at 18%, dub at 145%).
+ */
+export async function applyVoiceDubbingToClipAsync(params: {
+  videoPath: string;
+  transcriptText: string;
+  targetLang: VoiceDubbingLang;
+  nvidiaApiKey?: string;
+}): Promise<{ dubbed: boolean; translatedText: string }> {
+  if (!params.targetLang || params.targetLang === 'NONE' || !fs.existsSync(params.videoPath)) {
+    return { dubbed: false, translatedText: params.transcriptText };
+  }
+
+  const cleanSource = (params.transcriptText || '').trim();
+  if (!cleanSource) {
+    return { dubbed: false, translatedText: '' };
+  }
+
+  const langLabel =
+    params.targetLang === 'ES_LATAM'
+      ? 'español neutro latinoamericano'
+      : params.targetLang === 'ES_SPAIN'
+        ? 'español de España'
+        : params.targetLang === 'PT_BR'
+          ? 'portugués de Brasil'
+          : 'inglés estadounidense';
+
+  const voiceMap: Record<VoiceDubbingLang, string> = {
+    NONE: 'es-MX-JorgeNeural',
+    ES_LATAM: 'es-MX-JorgeNeural',
+    ES_SPAIN: 'es-ES-AlvaroNeural',
+    EN_US: 'en-US-ChristopherNeural',
+    PT_BR: 'pt-BR-AntonioNeural',
+  };
+  const edgeVoice = voiceMap[params.targetLang] || 'es-MX-JorgeNeural';
+  const apiKey = (params.nvidiaApiKey || DEFAULT_NVIDIA_NIM_KEY).trim();
+
+  let translatedText = cleanSource;
+  try {
+    const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'nvidia/nemotron-3.5-bolt-e4b',
+        messages: [
+          {
+            role: 'system',
+            content: `Eres un actor de doblaje profesional. Traduce el siguiente texto hablado a ${langLabel} manteniendo el tono enérgico, natural y conciso para doblaje sincronizado. Devuelve ÚNICAMENTE el texto traducido sin comillas ni explicaciones.`,
+          },
+          { role: 'user', content: cleanSource },
+        ],
+        max_tokens: 400,
+        temperature: 0.35,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      const candidate = String(data?.choices?.[0]?.message?.content || '').trim();
+      if (candidate.length > 4) {
+        translatedText = candidate.replace(/^["«]|["»]$/g, '').trim();
+      }
+    }
+  } catch {}
+
+  const ttsMp3Path = `${params.videoPath}.dub.mp3`;
+  const tmpDubVideoPath = `${params.videoPath}.dubbed.mp4`;
+  try {
+    const ttsRes = await runCommandAsync(
+      'python3',
+      ['-m', 'edge_tts', '--voice', edgeVoice, '--rate=+8%', '--text', translatedText, '--write-media', ttsMp3Path],
+      25000
+    );
+    if (ttsRes.status === 0 && fs.existsSync(ttsMp3Path) && fs.statSync(ttsMp3Path).size > 1000) {
+      const mixRes = await runCommandAsync(
+        'ffmpeg',
+        [
+          '-y',
+          '-i',
+          params.videoPath,
+          '-i',
+          ttsMp3Path,
+          '-filter_complex',
+          '[0:a]volume=0.18[orig];[1:a]volume=1.45[dub];[orig][dub]amix=inputs=2:duration=first:dropout_transition=2[aout]',
+          '-map',
+          '0:v',
+          '-map',
+          '[aout]',
+          '-c:v',
+          'copy',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+          '-movflags',
+          '+faststart',
+          tmpDubVideoPath,
+        ],
+        35000
+      );
+      if (mixRes.status === 0 && fs.existsSync(tmpDubVideoPath) && fs.statSync(tmpDubVideoPath).size > 5000) {
+        fs.renameSync(tmpDubVideoPath, params.videoPath);
+        try {
+          fs.unlinkSync(ttsMp3Path);
+        } catch {}
+        return { dubbed: true, translatedText };
+      }
+    }
+  } catch {}
+
+  for (const f of [ttsMp3Path, tmpDubVideoPath]) {
+    if (fs.existsSync(f)) {
+      try {
+        fs.unlinkSync(f);
+      } catch {}
+    }
+  }
+  return { dubbed: false, translatedText };
+}
+
 /**
  * Renders a real playable MP4 (H.264 + AAC) clip using FFmpeg with Auto-Reframe (9:16, 1:1, 4:5, 16:9),
+ * optional 50/50 Split-Screen Hypnotic Retention Mode, Auto-Ducked Viral Background Music,
  * burned-in ASS animated karaoke subtitles + Hook Banner + Brand Kit via libass,
  * Motion Graphics custom Image/Logo Watermark Overlay (PNG/JPG/WEBP),
  * OpusClip AI B-Roll Cutaway / Auto Zoom / Auto Transitions / Auto Color Correction, and AI Studio Audio Enhancer DSP.
@@ -922,6 +1289,9 @@ export function renderClipWithFfmpeg(params: {
   watermarkImagePath?: string;
   watermarkPosition?: WatermarkPosition;
   watermarkScalePx?: number;
+  splitScreenMode?: SplitScreenRetentionMode;
+  backgroundMusicTrack?: ViralMusicTrackId;
+  storageDir?: string;
 }): MediaProbeResult {
   fs.mkdirSync(path.dirname(params.outputVideoPath), { recursive: true });
 
@@ -1025,6 +1395,9 @@ export function renderClipWithFfmpeg(params: {
   }
 
   const hasWatermarkImage = Boolean(params.watermarkImagePath && fs.existsSync(params.watermarkImagePath));
+  const resolvedStorageDir = params.storageDir || path.dirname(path.dirname(params.outputVideoPath));
+  const useSplitScreen =
+    Boolean(params.splitScreenMode && params.splitScreenMode !== 'NONE') && params.aspectRatio === '9:16';
 
   // Place -ss BEFORE -i for fast seek, and -t AFTER -i so output clip duration is strictly enforced!
   const args: string[] = [
@@ -1035,7 +1408,34 @@ export function renderClipWithFfmpeg(params: {
     params.sourceVideoPath,
   ];
 
-  if (hasWatermarkImage && params.watermarkImagePath) {
+  if (useSplitScreen && params.splitScreenMode) {
+    const loopPath = ensureHypnoticLoopVideo(resolvedStorageDir, params.splitScreenMode);
+    args.push('-stream_loop', '-1', '-i', loopPath);
+    const halfH = Math.floor(targetH / 2) - (Math.floor(targetH / 2) % 2);
+    const botH = targetH - halfH;
+    const postStackParts: string[] = [
+      `drawbox=x=0:y=${halfH - 3}:w=${targetW}:h=6:color=#FFD43B@0.95:t=fill`,
+    ];
+    if (useColor) {
+      postStackParts.push('eq=saturation=1.22:contrast=1.08:brightness=0.02');
+    }
+    if (useTransitions) {
+      const fadeOutStart = Math.max(0.5, clipDur - 0.5).toFixed(2);
+      postStackParts.push(`fade=t=in:st=0:d=0.4,fade=t=out:st=${fadeOutStart}:d=0.4`);
+    }
+    if (params.subtitleAssPath && fs.existsSync(params.subtitleAssPath)) {
+      const escapedAss = params.subtitleAssPath
+        .replace(/\\/g, '/')
+        .replace(/:/g, '\\:')
+        .replace(/'/g, "\\'");
+      postStackParts.push(`ass='${escapedAss}'`);
+    }
+    if (params.speed && params.speed !== 1 && params.speed >= 0.5 && params.speed <= 2.0) {
+      postStackParts.push(`setpts=${(1 / params.speed).toFixed(3)}*PTS`);
+    }
+    const filterComplex = `[0:v]scale=${targetW}:${halfH}:force_original_aspect_ratio=increase,crop=${targetW}:${halfH}[topv];[1:v]scale=${targetW}:${botH}:force_original_aspect_ratio=increase,crop=${targetW}:${botH}[botv];[topv][botv]vstack=inputs=2,${postStackParts.join(',')}[vout]`;
+    args.push('-t', String(clipDur), '-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?');
+  } else if (hasWatermarkImage && params.watermarkImagePath) {
     args.push('-i', params.watermarkImagePath);
     const wmWidth = Math.max(48, Math.min(420, Number(params.watermarkScalePx) || 140));
     const pos = params.watermarkPosition || 'TOP_RIGHT';
@@ -1076,6 +1476,13 @@ export function renderClipWithFfmpeg(params: {
   const proc = spawnSync('ffmpeg', args, { encoding: 'utf-8', timeout: 120000 });
   if (proc.status !== 0) {
     throw new Error(`Error de FFmpeg al renderizar clip: ${proc.stderr?.slice(-400)}`);
+  }
+
+  if (params.backgroundMusicTrack && params.backgroundMusicTrack !== 'NONE') {
+    try {
+      const bgmPath = ensureViralMusicTrackFile(resolvedStorageDir, params.backgroundMusicTrack);
+      mixBackgroundMusicWithAutoDucking(params.outputVideoPath, bgmPath);
+    } catch {}
   }
 
   return probeMediaWithFfprobe(params.outputVideoPath);

@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import express, { type Express, type Response } from 'express';
@@ -13,6 +14,7 @@ import {
 } from '@banana/database';
 import { SUBTITLE_TEMPLATES, validateSafeExternalUrl } from '@banana/shared';
 import {
+  applyVoiceDubbingToClipAsync,
   buildPremiereXmlForClip,
   captureLiveStreamSegmentAsync,
   computeEmbedding384,
@@ -31,7 +33,10 @@ import {
   transcribeVideoWithFasterWhisperAsync,
   verifySignedStorageToken,
   verifyVideoMagicBytes,
+  type SplitScreenRetentionMode,
   type StorySceneSpec,
+  type ViralMusicTrackId,
+  type VoiceDubbingLang,
 } from '@banana/workers';
 import {
   type AuthenticatedRequest,
@@ -1353,9 +1358,67 @@ export async function createBananaApiApp(): Promise<Express> {
         ? signStorageObjectUrl({ storageObjectId: c.storageObjectId, userId: c.userId }).url
         : null,
       xmlExportUrl: `/api/v1/clips/${c.id}/xml`,
+      thumbnailDownloadUrl: `/api/v1/clips/${c.id}/thumbnail`,
     }));
 
     return res.json({ clips });
+  });
+
+  // Viral Cover / Thumbnail Generator & Downloader
+  router.get('/clips/:id/thumbnail', async (req: AuthenticatedRequest, res) => {
+    const clipId = req.params.id;
+    const cRes = await db.query(
+      `SELECT c.*, cs."scoreTotal", so."localPath" as "videoLocalPath"
+       FROM "Clip" c
+       LEFT JOIN "ClipScore" cs ON cs."clipId" = c.id
+       LEFT JOIN "StorageObject" so ON so.id = c."storageObjectId"
+       WHERE c.id = $1 LIMIT 1`,
+      [clipId]
+    );
+    if (cRes.rows.length === 0) return res.status(404).json({ error: 'CLIP_NOT_FOUND' });
+    const clip = cRes.rows[0];
+
+    const thumbRel = clip.thumbnailPath || `banana-thumbnails/clip_${clip.id}.jpg`;
+    const thumbAbs = path.isAbsolute(thumbRel) ? thumbRel : path.join(storageRoot, thumbRel);
+    const videoAbs =
+      clip.videoLocalPath && fs.existsSync(clip.videoLocalPath)
+        ? clip.videoLocalPath
+        : clip.previewPath
+          ? path.join(storageRoot, clip.previewPath)
+          : '';
+
+    const forceRegen = req.query.regenerate === '1' || !fs.existsSync(thumbAbs);
+    if (forceRegen && videoAbs && fs.existsSync(videoAbs)) {
+      const customHeadline =
+        typeof req.query.headline === 'string' && req.query.headline.trim()
+          ? req.query.headline.trim()
+          : String(clip.summary || clip.title || 'MOMENTO VIRAL')
+              .replace(/🔥|Highlight #\d+|\[Min [^\]]+\]:?/gi, '')
+              .replace(/["«»¿?¡!]/g, '')
+              .trim()
+              .split(/\s+/)
+              .slice(0, 6)
+              .join(' ');
+      generateThumbnailFfmpeg(
+        videoAbs,
+        thumbAbs,
+        Math.min(1.5, Number(clip.durationSec || 10) / 3),
+        customHeadline,
+        Number(clip.scoreTotal || 95)
+      );
+    }
+
+    if (!fs.existsSync(thumbAbs)) {
+      return res.status(404).json({ error: 'THUMBNAIL_NOT_FOUND' });
+    }
+    res.setHeader('Content-Type', 'image/jpeg');
+    if (req.query.download === '1') {
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="Portada_Viral_${clip.id.slice(0, 8)}.jpg"`
+      );
+    }
+    return res.sendFile(thumbAbs);
   });
 
   // OpusClip XML Export for Adobe Premiere Pro, DaVinci Resolve & Final Cut Pro
@@ -1610,9 +1673,105 @@ export async function createBananaApiApp(): Promise<Express> {
       autoCutEnabled: boolean;
       clipDurationSec: number;
       intervalSec: number;
+      splitScreenMode?: SplitScreenRetentionMode;
+      backgroundMusicTrack?: ViralMusicTrackId;
+      voiceDubbingLang?: VoiceDubbingLang;
       timer?: NodeJS.Timeout;
     }
   >();
+
+  // Helper to send a Clip MP4 + Viral Caption directly to a user's Telegram Bot
+  const sendClipToTelegramHelperAsync = async (params: {
+    userId: string;
+    clipId: string;
+    overrideBotToken?: string;
+    overrideChatId?: string;
+  }): Promise<{ ok: boolean; message: string }> => {
+    let botToken = (params.overrideBotToken || '').trim();
+    let chatId = (params.overrideChatId || '').trim();
+
+    if (!botToken || !chatId) {
+      const cfgRes = await db.query<{ valueJson: string }>(
+        `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
+        [`telegram_config_${params.userId}`]
+      );
+      if (cfgRes.rows[0]?.valueJson) {
+        try {
+          const parsed = JSON.parse(cfgRes.rows[0].valueJson);
+          if (!botToken) botToken = String(parsed.botToken || '').trim();
+          if (!chatId) chatId = String(parsed.chatId || '').trim();
+        } catch {}
+      }
+    }
+
+    if (!botToken || !chatId) {
+      return {
+        ok: false,
+        message: 'Configura primero tu Bot Token y Chat ID de Telegram en Publicación Social → Automatizaciones.',
+      };
+    }
+
+    const cRes = await db.query(
+      `SELECT c.*, cs."scoreTotal", so."localPath" as "videoLocalPath"
+       FROM "Clip" c
+       LEFT JOIN "ClipScore" cs ON cs."clipId" = c.id
+       LEFT JOIN "StorageObject" so ON so.id = c."storageObjectId"
+       WHERE c.id = $1 LIMIT 1`,
+      [params.clipId]
+    );
+    if (cRes.rows.length === 0) {
+      return { ok: false, message: 'Clip no encontrado.' };
+    }
+    const clip = cRes.rows[0];
+    const videoAbs =
+      clip.videoLocalPath && fs.existsSync(clip.videoLocalPath)
+        ? clip.videoLocalPath
+        : clip.previewPath
+          ? path.join(storageRoot, clip.previewPath)
+          : '';
+
+    const hashtagsArr =
+      typeof clip.hashtags === 'string' ? JSON.parse(clip.hashtags || '[]') : clip.hashtags || ['#viral', '#shorts'];
+    const caption = `🍌 *BANANA CLIPS AI STUDIO*\n🔥 *${clip.title}*\n⭐ Score Viral: ${clip.scoreTotal || 95}/100\n\n"${String(clip.summary || '').slice(0, 220)}"\n\n${hashtagsArr.join(' ')}`;
+
+    try {
+      if (videoAbs && fs.existsSync(videoAbs) && fs.statSync(videoAbs).size < 48 * 1024 * 1024) {
+        const fileBuf = fs.readFileSync(videoAbs);
+        const form = new FormData();
+        form.append('chat_id', chatId);
+        form.append('caption', caption);
+        form.append('video', new Blob([fileBuf], { type: 'video/mp4' }), `clip_${clip.id.slice(0, 8)}.mp4`);
+
+        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
+          method: 'POST',
+          body: form,
+          signal: AbortSignal.timeout(45000),
+        });
+        const tgData: any = await tgRes.json();
+        if (tgRes.ok && tgData?.ok) {
+          return { ok: true, message: `✅ Video MP4 + Copy Viral enviado directamente a tu Telegram (${chatId}).` };
+        }
+        return {
+          ok: false,
+          message: `Telegram API respondió: ${tgData?.description || tgRes.statusText}`,
+        };
+      } else {
+        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: caption }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const tgData: any = await tgRes.json();
+        if (tgRes.ok && tgData?.ok) {
+          return { ok: true, message: `✅ Mensaje enviado a tu Telegram (${chatId}).` };
+        }
+        return { ok: false, message: `Telegram API respondió: ${tgData?.description || tgRes.statusText}` };
+      }
+    } catch (err: any) {
+      return { ok: false, message: `Error al conectar con Telegram API: ${err?.message}` };
+    }
+  };
 
   const captureAndRenderLiveCutAsync = async (params: {
     videoId: string;
@@ -1802,9 +1961,26 @@ export async function createBananaApiApp(): Promise<Express> {
           autoZoom: true,
           autoColorCorrection: true,
           audioEnhancer: true,
+          splitScreenMode: rt.splitScreenMode || 'NONE',
+          backgroundMusicTrack: rt.backgroundMusicTrack || 'NONE',
+          storageDir: storageRoot,
         });
 
-        generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(2.0, clipDur / 3));
+        if (rt.voiceDubbingLang && rt.voiceDubbingLang !== 'NONE') {
+          await applyVoiceDubbingToClipAsync({
+            videoPath: clipFileAbs,
+            transcriptText: bestSummary || finalWords.map((w) => w.word).join(' '),
+            targetLang: rt.voiceDubbingLang,
+          });
+        }
+
+        generateThumbnailFfmpeg(
+          clipFileAbs,
+          thumbFileAbs,
+          Math.min(2.0, clipDur / 3),
+          liveHookHeadline || params.sessionTitle,
+          bestScore
+        );
 
         const storageObjId = crypto.randomUUID();
         const statSize = fs.existsSync(clipFileAbs) ? fs.statSync(clipFileAbs).size : 0;
@@ -1866,6 +2042,27 @@ export async function createBananaApiApp(): Promise<Express> {
 
         rt.cutsCount = cutNum;
         createdClipIds.push(clipId);
+
+        // If user enabled Auto-Telegram Push for Live Clipper, send the clip automatically in the background
+        setImmediate(async () => {
+          try {
+            const cfgRes = await db.query<{ valueJson: string }>(
+              `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
+              [`telegram_config_${params.userId}`]
+            );
+            if (cfgRes.rows[0]?.valueJson) {
+              const parsed = JSON.parse(cfgRes.rows[0].valueJson);
+              if (parsed.autoSendLiveClips && parsed.botToken && parsed.chatId) {
+                await sendClipToTelegramHelperAsync({
+                  userId: params.userId,
+                  clipId,
+                  overrideBotToken: parsed.botToken,
+                  overrideChatId: parsed.chatId,
+                });
+              }
+            }
+          } catch {}
+        });
       }
 
       rt.blocksScanned = blockIdx + 1;
@@ -1928,6 +2125,7 @@ export async function createBananaApiApp(): Promise<Express> {
       signedDownloadUrl: c.storageObjectId
         ? signStorageObjectUrl({ storageObjectId: c.storageObjectId, userId: c.userId }).url
         : null,
+      thumbnailDownloadUrl: `/api/v1/clips/${c.id}/thumbnail`,
     }));
 
     return res.json({
@@ -1950,6 +2148,9 @@ export async function createBananaApiApp(): Promise<Express> {
       clipDurationSec = 20,
       intervalSec = 600,
       autoCutEnabled = true,
+      splitScreenMode = 'NONE',
+      backgroundMusicTrack = 'NONE',
+      voiceDubbingLang = 'NONE',
     } = req.body || {};
 
     if (action === 'START') {
@@ -1990,6 +2191,9 @@ export async function createBananaApiApp(): Promise<Express> {
         autoCutEnabled: Boolean(autoCutEnabled),
         clipDurationSec: dur,
         intervalSec: iv,
+        splitScreenMode: (splitScreenMode as SplitScreenRetentionMode) || 'NONE',
+        backgroundMusicTrack: (backgroundMusicTrack as ViralMusicTrackId) || 'NONE',
+        voiceDubbingLang: (voiceDubbingLang as VoiceDubbingLang) || 'NONE',
       });
 
       // Immediately scan Block #1 (extracting up to 3 top highlights) and continuously scan subsequent blocks
@@ -2685,6 +2889,300 @@ export async function createBananaApiApp(): Promise<Express> {
     } catch (err: any) {
       return res.status(502).json({ error: 'WEBHOOK_FAILED', message: `No se pudo conectar al Webhook: ${err?.message}` });
     }
+  });
+
+  // On-Demand 1-Click Neural Voice Dubbing for any existing Clip
+  router.post('/clips/:id/dub', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const clipId = req.params.id;
+    const targetLang = ((req.body?.targetLang as VoiceDubbingLang) || 'ES_LATAM') as VoiceDubbingLang;
+    const cRes = await db.query(
+      `SELECT c.*, so."localPath" as "videoLocalPath"
+       FROM "Clip" c
+       LEFT JOIN "StorageObject" so ON so.id = c."storageObjectId"
+       WHERE c.id = $1 LIMIT 1`,
+      [clipId]
+    );
+    if (cRes.rows.length === 0) return res.status(404).json({ error: 'CLIP_NOT_FOUND' });
+    const clip = cRes.rows[0];
+    const videoAbs =
+      clip.videoLocalPath && fs.existsSync(clip.videoLocalPath)
+        ? clip.videoLocalPath
+        : clip.previewPath
+          ? path.join(storageRoot, clip.previewPath)
+          : '';
+    if (!videoAbs || !fs.existsSync(videoAbs)) {
+      return res.status(404).json({ error: 'VIDEO_FILE_NOT_FOUND' });
+    }
+
+    const result = await applyVoiceDubbingToClipAsync({
+      videoPath: videoAbs,
+      transcriptText: String(clip.summary || clip.title || ''),
+      targetLang,
+    });
+
+    if (result.dubbed) {
+      await db.query(
+        `UPDATE "Clip" SET summary = $1, language = $2 WHERE id = $3`,
+        [result.translatedText, targetLang.toLowerCase().slice(0, 2), clipId]
+      );
+      return res.json({
+        dubbed: true,
+        targetLang,
+        translatedText: result.translatedText,
+        message: `✅ Clip doblado con voz neuronal (${targetLang}) y Audio Ducking aplicado.`,
+      });
+    }
+    return res.status(500).json({
+      dubbed: false,
+      message: 'No se pudo aplicar el doblaje neuronal en este momento.',
+    });
+  });
+
+  // Feature 5: Telegram Bot Direct Push ("Del Servidor a tu Celular en 1 Clic")
+  router.get('/social/telegram-config', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const cfgRes = await db.query<{ valueJson: string }>(
+      `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
+      [`telegram_config_${req.user!.sub}`]
+    );
+    let config = { botToken: '', chatId: '', autoSendLiveClips: true };
+    if (cfgRes.rows[0]?.valueJson) {
+      try {
+        config = { ...config, ...JSON.parse(cfgRes.rows[0].valueJson) };
+      } catch {}
+    }
+    return res.json({ config });
+  });
+
+  router.post('/social/telegram-config', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const { botToken = '', chatId = '', autoSendLiveClips = true } = req.body || {};
+    const key = `telegram_config_${req.user!.sub}`;
+    const valueObj = {
+      botToken: String(botToken).trim(),
+      chatId: String(chatId).trim(),
+      autoSendLiveClips: Boolean(autoSendLiveClips),
+      updatedAt: new Date().toISOString(),
+    };
+    const exists = await db.query(`SELECT id FROM "SystemSetting" WHERE key = $1 LIMIT 1`, [key]);
+    if (exists.rows.length === 0) {
+      await db.query(
+        `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, $2, $3, $4)`,
+        [crypto.randomUUID(), key, JSON.stringify(valueObj), 'Configuración de Bot de Telegram Directo']
+      );
+    } else {
+      await db.query(
+        `UPDATE "SystemSetting" SET "valueJson" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE key = $2`,
+        [JSON.stringify(valueObj), key]
+      );
+    }
+    return res.json({
+      saved: true,
+      config: valueObj,
+      message: '✅ Configuración de Bot de Telegram guardada correctamente.',
+    });
+  });
+
+  router.post('/social/telegram-send', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const { clipId, botToken, chatId } = req.body || {};
+    let targetClipId = clipId;
+    if (!targetClipId) {
+      const latest = await db.query<{ id: string }>(
+        `SELECT id FROM "Clip" WHERE "userId" = $1 AND "isTrash" = false ORDER BY "createdAt" DESC LIMIT 1`,
+        [req.user!.sub]
+      );
+      targetClipId = latest.rows[0]?.id;
+    }
+    if (!targetClipId) {
+      return res.status(404).json({ ok: false, message: 'No hay clips disponibles para enviar.' });
+    }
+    const result = await sendClipToTelegramHelperAsync({
+      userId: req.user!.sub,
+      clipId: targetClipId,
+      overrideBotToken: botToken,
+      overrideChatId: chatId,
+    });
+    return res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  // Feature 6: 24/7 Auto-Channel Watcher (Vigilante Automático de Canales de YouTube / Twitch)
+  const getWatchedChannelsForUser = async (userId: string): Promise<any[]> => {
+    const key = `channel_watcher_${userId}`;
+    const r = await db.query<{ valueJson: string }>(
+      `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
+      [key]
+    );
+    if (!r.rows[0]?.valueJson) return [];
+    try {
+      const parsed = JSON.parse(r.rows[0].valueJson);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveWatchedChannelsForUser = async (userId: string, channels: any[]) => {
+    const key = `channel_watcher_${userId}`;
+    const exists = await db.query(`SELECT id FROM "SystemSetting" WHERE key = $1 LIMIT 1`, [key]);
+    if (exists.rows.length === 0) {
+      await db.query(
+        `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, $2, $3, $4)`,
+        [crypto.randomUUID(), key, JSON.stringify(channels), 'Canales monitoreados 24/7 por Auto-Channel Watcher']
+      );
+    } else {
+      await db.query(
+        `UPDATE "SystemSetting" SET "valueJson" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE key = $2`,
+        [JSON.stringify(channels), key]
+      );
+    }
+  };
+
+  router.get('/channel-watcher', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const channels = await getWatchedChannelsForUser(req.user!.sub);
+    return res.json({ channels });
+  });
+
+  router.post('/channel-watcher', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const {
+      channelUrl = '',
+      channelName = 'Canal Monitoreado',
+      checkIntervalMin = 15,
+      clipDurationSec = 20,
+      splitScreenMode = 'NONE',
+      voiceDubbingLang = 'NONE',
+    } = req.body || {};
+    if (!channelUrl || !/^https?:\/\//i.test(channelUrl)) {
+      return res.status(400).json({ error: 'INVALID_CHANNEL_URL', message: 'Ingresa una URL válida de canal o directo de YouTube/Twitch.' });
+    }
+    const channels = await getWatchedChannelsForUser(req.user!.sub);
+    const newEntry = {
+      id: crypto.randomUUID(),
+      channelUrl: String(channelUrl).trim(),
+      channelName: String(channelName).trim() || 'Canal de YouTube',
+      checkIntervalMin: Math.max(5, Number(checkIntervalMin) || 15),
+      clipDurationSec: Math.max(12, Math.min(45, Number(clipDurationSec) || 20)),
+      splitScreenMode: String(splitScreenMode || 'NONE'),
+      voiceDubbingLang: String(voiceDubbingLang || 'NONE'),
+      lastCheckedAt: null,
+      lastDetectedTitle: null,
+      status: 'ACTIVE',
+      createdAt: new Date().toISOString(),
+    };
+    channels.unshift(newEntry);
+    await saveWatchedChannelsForUser(req.user!.sub, channels);
+    return res.status(201).json({ channel: newEntry, channels });
+  });
+
+  router.delete('/channel-watcher/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const channels = await getWatchedChannelsForUser(req.user!.sub);
+    const filtered = channels.filter((c: any) => c.id !== req.params.id);
+    await saveWatchedChannelsForUser(req.user!.sub, filtered);
+    return res.json({ deleted: true, channels: filtered });
+  });
+
+  router.post('/channel-watcher/scan-now', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const { channelId } = req.body || {};
+    const channels = await getWatchedChannelsForUser(req.user!.sub);
+    const target = channelId ? channels.find((c: any) => c.id === channelId) : channels[0];
+    if (!target) {
+      return res.status(404).json({ error: 'NO_WATCHED_CHANNEL', message: 'Agrega primero un canal de YouTube o Twitch al Vigilante 24/7.' });
+    }
+
+    // Resolve latest video/live URL from the channel via yt-dlp --flat-playlist --playlist-end 1
+    const resolveChannelLatestUrl = (url: string): Promise<{ videoUrl: string; title: string }> =>
+      new Promise((resolve) => {
+        const child = spawn('yt-dlp', [
+          '--flat-playlist',
+          '--playlist-end',
+          '1',
+          '--no-warnings',
+          '--print',
+          '%(webpage_url)s|||%(title)s',
+          url,
+        ]);
+        let out = '';
+        const timer = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {}
+          resolve({ videoUrl: url, title: target.channelName });
+        }, 18000);
+        child.stdout.on('data', (d) => (out += d.toString()));
+        child.on('close', () => {
+          clearTimeout(timer);
+          const firstLine = out.split(/\r?\n/).find((l) => l.includes('|||')) || '';
+          const [vUrl, vTitle] = firstLine.split('|||');
+          if (vUrl && vUrl.trim().startsWith('http')) {
+            resolve({ videoUrl: vUrl.trim(), title: (vTitle || target.channelName).trim() });
+          } else {
+            resolve({ videoUrl: url, title: target.channelName });
+          }
+        });
+        child.on('error', () => {
+          clearTimeout(timer);
+          resolve({ videoUrl: url, title: target.channelName });
+        });
+      });
+
+    const resolved = await resolveChannelLatestUrl(target.channelUrl);
+    target.lastCheckedAt = new Date().toISOString();
+    target.lastDetectedTitle = resolved.title;
+    await saveWatchedChannelsForUser(req.user!.sub, channels);
+
+    // Trigger automatic Live Clipper / Highlight extraction on the resolved video/stream
+    const newVideoId = crypto.randomUUID();
+    const objectKey = `live_${newVideoId}.mp4`;
+    const finalPath = path.join(storageRoot, 'banana-videos', objectKey);
+    ensureFixtureVideo(finalPath, 12);
+    const meta = probeMediaWithFfprobe(finalPath);
+    const storageObjId = crypto.randomUUID();
+
+    await db.query(
+      `INSERT INTO "StorageObject" ("id", "userId", "bucket", "objectKey", "localPath", "mimeType", "sizeBytes")
+       VALUES ($1, $2, 'banana-videos', $3, $4, 'video/mp4', $5)`,
+      [storageObjId, req.user!.sub, objectKey, finalPath, meta.fileSizeBytes]
+    );
+    await db.query(
+      `INSERT INTO "Video" ("id", "userId", "title", "originalFilename", "storageObjectId", "status")
+       VALUES ($1, $2, $3, $4, $5, 'RECORDING')`,
+      [newVideoId, req.user!.sub, `[Vigilante 24/7] ${resolved.title}`, objectKey, storageObjId]
+    );
+    await db.query(
+      `INSERT INTO "VideoSource" ("id", "videoId", "sourceType", "originUrl", "liveStreamState", "protocol")
+       VALUES ($1, $2, 'LIVE_RTMP', $3, 'RECORDING', 'YOUTUBE_LIVE')`,
+      [crypto.randomUUID(), newVideoId, resolved.videoUrl]
+    );
+
+    liveSessionStatusMap.set(newVideoId, {
+      currentStatusText: `📡 Vigilante 24/7 extrayendo Mejores Momentos de "${resolved.title}"...`,
+      cutsCount: 0,
+      blocksScanned: 0,
+      isCapturing: false,
+      autoCutEnabled: false,
+      clipDurationSec: target.clipDurationSec || 20,
+      intervalSec: 300,
+      splitScreenMode: (target.splitScreenMode as SplitScreenRetentionMode) || 'NONE',
+      backgroundMusicTrack: 'NONE',
+      voiceDubbingLang: (target.voiceDubbingLang as VoiceDubbingLang) || 'NONE',
+    });
+
+    const userId = req.user!.sub;
+    setImmediate(() => {
+      captureAndRenderLiveCutAsync({
+        videoId: newVideoId,
+        userId,
+        streamUrl: resolved.videoUrl,
+        sessionTitle: resolved.title,
+        clipDurationSec: target.clipDurationSec || 20,
+      });
+    });
+
+    return res.json({
+      scanned: true,
+      videoId: newVideoId,
+      detectedUrl: resolved.videoUrl,
+      detectedTitle: resolved.title,
+      channels,
+      message: `📡 Vigilante 24/7 detectó "${resolved.title}" e inició la extracción automática de Mejores Momentos.`,
+    });
   });
 
   router.post('/social/accounts', requireAuth, async (req: AuthenticatedRequest, res) => {
