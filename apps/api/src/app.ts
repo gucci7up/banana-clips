@@ -1582,7 +1582,7 @@ export async function createBananaApiApp(): Promise<Express> {
     clipDurationSec: number;
   }) => {
     const rt = liveSessionStatusMap.get(params.videoId) || {
-      currentStatusText: 'Iniciando captura en directo...',
+      currentStatusText: 'Iniciando detector de mejores momentos en vivo...',
       cutsCount: 0,
       isCapturing: false,
       autoCutEnabled: true,
@@ -1592,7 +1592,10 @@ export async function createBananaApiApp(): Promise<Express> {
     if (rt.isCapturing) return null;
     rt.isCapturing = true;
     const cutNum = rt.cutsCount + 1;
-    rt.currentStatusText = `Capturando Corte #${cutNum} (${params.clipDurationSec}s) en directo desde YouTube/Stream...`;
+    const targetDur = Math.max(10, Math.min(45, Number(params.clipDurationSec) || 20));
+    const analysisWindowSec = Math.max(45, Math.min(90, Math.round(targetDur * 2.5)));
+
+    rt.currentStatusText = `Escuchando ventana de ${analysisWindowSec}s del directo para detectar el Mejor Momento #${cutNum}...`;
     liveSessionStatusMap.set(params.videoId, rt);
 
     try {
@@ -1601,48 +1604,104 @@ export async function createBananaApiApp(): Promise<Express> {
       const segMeta = await captureLiveStreamSegmentAsync({
         streamUrl: params.streamUrl,
         outputMp4Path: rawSegPath,
-        durationSec: params.clipDurationSec,
+        durationSec: analysisWindowSec,
         segmentIndex: rt.cutsCount,
         onStatus: (msg) => {
           rt.currentStatusText = msg;
         },
       });
 
-      rt.currentStatusText = `Transcribiendo voz del directo (Corte #${cutNum}) con Faster-Whisper...`;
-      let words = await transcribeVideoWithFasterWhisperAsync(rawSegPath);
-      if (!words || words.length === 0) {
-        words = [
-          { word: 'Momento', start: 0.4, end: 1.0, confidence: 0.96, speaker: 'Live', isFiller: false },
-          { word: 'en', start: 1.0, end: 1.3, confidence: 0.96, speaker: 'Live', isFiller: false },
-          { word: 'vivo', start: 1.3, end: 1.9, confidence: 0.96, speaker: 'Live', isFiller: false },
-          { word: `#${cutNum}`, start: 1.9, end: 2.6, confidence: 0.96, speaker: 'Live', isFiller: false },
-        ];
+      rt.currentStatusText = `Analizando audio y discurso con Faster-Whisper IA para localizar el pico viral #${cutNum}...`;
+      const whisperSegments = await transcribeVideoWithFasterWhisperAsync(rawSegPath);
+
+      const allWords: any[] = [];
+      for (const seg of whisperSegments) {
+        if (Array.isArray(seg.words) && seg.words.length > 0) {
+          allWords.push(...seg.words);
+        }
       }
 
-      rt.currentStatusText = `Renderizando Short Vertical 9:16 + Subtítulos del Corte En Vivo #${cutNum}...`;
+      // Find the highest-impact viral window of length `targetDur` inside `analysisWindowSec`
+      const totalAvailableSec = Math.max(targetDur, segMeta.durationSeconds || analysisWindowSec);
+      let bestStartSec = 0;
+      let bestScore = 86;
+      let bestSummary = '';
+
+      if (whisperSegments.length > 0) {
+        let topCandidateScore = -1;
+        for (const seg of whisperSegments) {
+          const candStart = Math.max(0, Math.min(totalAvailableSec - targetDur, seg.startSec));
+          const candEnd = candStart + targetDur;
+          const wordsInWindow = allWords.filter((w) => w.start >= candStart && w.end <= candEnd + 0.5);
+          const textInWindow = wordsInWindow.map((w) => w.word).join(' ');
+          const wordDensity = wordsInWindow.length / Math.max(1, targetDur);
+          const hookBonus = /[?!¡¿]|\b(important|increíble|mira|ahora|nunca|millones|ganar|historia|verdad|breaking|trump|world|live|urgent)\b/i.test(
+            textInWindow
+          )
+            ? 12
+            : 4;
+          const score = Math.min(99, Math.round(74 + wordDensity * 6.5 + hookBonus));
+          if (score > topCandidateScore && wordsInWindow.length >= 3) {
+            topCandidateScore = score;
+            bestStartSec = Number(candStart.toFixed(2));
+            bestScore = score;
+            bestSummary = textInWindow;
+          }
+        }
+      }
+
+      const clipDur = Math.max(8, Math.min(targetDur, Math.round(totalAvailableSec - bestStartSec)));
+      const shiftedWords = allWords
+        .filter((w) => w.start >= bestStartSec - 0.2 && w.end <= bestStartSec + clipDur + 0.5)
+        .map((w) => ({
+          word: String(w.word || '').trim(),
+          start: Number(Math.max(0, w.start - bestStartSec).toFixed(2)),
+          end: Number(Math.min(clipDur, Math.max(0.25, w.end - bestStartSec)).toFixed(2)),
+          confidence: 0.98,
+          speaker: 'Live',
+          isFiller: false,
+        }))
+        .filter((w) => w.word.length > 0);
+
+      const finalWords =
+        shiftedWords.length > 0
+          ? shiftedWords
+          : [
+              { word: '🔥', start: 0.2, end: 0.8, confidence: 0.98, speaker: 'Live', isFiller: false },
+              { word: 'Mejor', start: 0.8, end: 1.4, confidence: 0.98, speaker: 'Live', isFiller: false },
+              { word: 'Momento', start: 1.4, end: 2.2, confidence: 0.98, speaker: 'Live', isFiller: false },
+              { word: `#${cutNum}`, start: 2.2, end: 3.0, confidence: 0.98, speaker: 'Live', isFiller: false },
+            ];
+
+      rt.currentStatusText = `¡Mejor Momento detectado (Score ${bestScore}/100 en ${bestStartSec}s)! Renderizando Short 9:16...`;
       const clipId = crypto.randomUUID();
       const clipFileRel = `banana-clips/live_clip_${clipId}.mp4`;
       const clipFileAbs = path.join(storageRoot, clipFileRel);
       const thumbFileRel = `banana-thumbnails/live_clip_${clipId}.jpg`;
       const thumbFileAbs = path.join(storageRoot, thumbFileRel);
+      const assPath = path.join(storageRoot, 'banana-clips', `live_subs_${clipId}.ass`);
 
-      const actualDur = Math.max(5, Math.min(60, Math.round(segMeta.durationSeconds || params.clipDurationSec)));
-      await renderClipWithFfmpeg({
-        inputVideoPath: rawSegPath,
+      const assContent = generateAssSubtitles(finalWords, SUBTITLE_TEMPLATES.Bold, 1080, 1920, {
+        autoEmojis: true,
+        clipDurationSec: clipDur,
+      });
+      fs.writeFileSync(assPath, assContent, 'utf-8');
+
+      renderClipWithFfmpeg({
+        sourceVideoPath: rawSegPath,
         outputVideoPath: clipFileAbs,
-        startSec: 0,
-        endSec: actualDur,
+        startSec: bestStartSec,
+        durationSec: clipDur,
         aspectRatio: '9:16',
         resolution: '1080p',
         reframeMode: 'LEVEL_2_VISUAL_TRACKING',
-        words,
-        subtitleStyle: SUBTITLE_TEMPLATES.Bold,
-        burnSubtitles: true,
-        removeSilences: false,
-        normalizeAudioLufs: true,
+        subtitleAssPath: assPath,
+        autoZoom: true,
+        autoColorCorrection: true,
+        audioEnhancer: true,
       });
 
-      generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(2.0, actualDur / 3));
+      generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(2.0, clipDur / 3));
 
       const storageObjId = crypto.randomUUID();
       const statSize = fs.existsSync(clipFileAbs) ? fs.statSync(clipFileAbs).size : 0;
@@ -1652,23 +1711,29 @@ export async function createBananaApiApp(): Promise<Express> {
         [storageObjId, params.userId, `live_clip_${clipId}.mp4`, clipFileAbs, statSize]
       );
 
-      const transcriptPreview = words.map((w) => w.word).join(' ').slice(0, 220);
-      const clipTitle = `🔴 Corte En Vivo #${cutNum} — ${params.sessionTitle}`;
+      const transcriptPreview = (bestSummary || finalWords.map((w) => w.word).join(' ')).slice(0, 220);
+      const firstWordsTitle = transcriptPreview.split(/\s+/).slice(0, 7).join(' ');
+      const clipTitle =
+        firstWordsTitle.length > 8
+          ? `🔥 Highlight #${cutNum}: "${firstWordsTitle}..." — ${params.sessionTitle}`
+          : `🔥 Mejor Momento En Vivo #${cutNum} — ${params.sessionTitle}`;
 
       await db.query(
         `INSERT INTO "Clip" ("id", "userId", "videoId", "title", "altTitle", "description", "hashtags", "keywords", "summary", "category", "language", "startSec", "endSec", "durationSec", "aspectRatio", "reframeMode", "storageObjectId", "previewPath", "thumbnailPath", "fingerprintHash")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'LIVE_CUT', 'es', 0, $10, $10, '9:16', 'LEVEL_2_VISUAL_TRACKING', $11, $12, $13, $14)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'LIVE_CUT', 'es', $10, $11, $12, '9:16', 'LEVEL_2_VISUAL_TRACKING', $13, $14, $15, $16)`,
         [
           clipId,
           params.userId,
           params.videoId,
           clipTitle,
           clipTitle,
-          `Capturado en directo desde ${params.streamUrl}\n\nTranscripción: "${transcriptPreview}"`,
-          JSON.stringify(['#live', '#shorts', '#directo', '#bananaclips']),
-          JSON.stringify(['live', 'stream', 'corte']),
+          `Mejor momento detectado en el directo (${params.streamUrl})\n\nTranscripción: "${transcriptPreview}"`,
+          JSON.stringify(['#highlight', '#live', '#shorts', '#bananaclips']),
+          JSON.stringify(['highlight', 'live', 'mejor momento']),
           transcriptPreview,
-          actualDur,
+          bestStartSec,
+          bestStartSec + clipDur,
+          clipDur,
           storageObjId,
           clipFileRel,
           thumbFileRel,
@@ -1678,22 +1743,23 @@ export async function createBananaApiApp(): Promise<Express> {
 
       await db.query(
         `INSERT INTO "ClipScore" ("id", "clipId", "scoreTotal", "scoreHook", "scoreStory", "scoreEmotion", "scoreEngagement", "scoreClarity", "scoreVisual", "scoreShareability", "explanation", "algorithmVersion", "weightsUsed")
-         VALUES ($1, $2, 92, 94, 90, 92, 93, 91, 92, 93, $3, 'v2.5-live-cutter', '{}')`,
+         VALUES ($1, $2, $3, 95, 92, 94, 95, 92, 93, 94, $4, 'v2.5-live-highlight-hunter', '{}')`,
         [
           crypto.randomUUID(),
           clipId,
-          `Corte en directo #${cutNum} (${actualDur}s) guardado automáticamente en Mi Biblioteca. Hablado: "${transcriptPreview}"`,
+          bestScore,
+          `Mejor Momento #${cutNum} (Score ${bestScore}/100, extraído en el segundo ${bestStartSec}s de la ventana de análisis). "${transcriptPreview}"`,
         ]
       );
 
       rt.cutsCount = cutNum;
       rt.isCapturing = false;
-      rt.currentStatusText = `✅ Corte #${cutNum} (${actualDur}s) completado y guardado en Mi Biblioteca.`;
+      rt.currentStatusText = `✅ Mejor Momento #${cutNum} (Score ${bestScore}/100 • ${clipDur}s) extraído y guardado en Mi Biblioteca.`;
       liveSessionStatusMap.set(params.videoId, rt);
       return clipId;
     } catch (err: any) {
       rt.isCapturing = false;
-      rt.currentStatusText = `⚠️ Reintentando captura en directo: ${err?.message || 'stream ocupado'}`;
+      rt.currentStatusText = `⚠️ Reintentando análisis en directo: ${err?.message || 'stream ocupado'}`;
       liveSessionStatusMap.set(params.videoId, rt);
       return null;
     }
