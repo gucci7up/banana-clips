@@ -2474,9 +2474,10 @@ export async function createBananaApiApp(): Promise<Express> {
           scenes: finalScenes,
           outputDir: workDir,
           finalVideoPath: clipFileAbs,
+          stylePreset: String(stylePreset),
           nvidiaApiKey: nvidiaApiKey ? String(nvidiaApiKey) : undefined,
           seed: Number(seed) || 42,
-          voiceName: String(voiceName || 'es-MX-JorgeNeural'),
+          voiceName: String(voiceName || 'MULTI_VOICE_CYANIDE'),
           burnSubtitles: Boolean(burnSubtitles),
           onProgress: (pct, phaseText) => {
             const current = storyJobsMap.get(jobId);

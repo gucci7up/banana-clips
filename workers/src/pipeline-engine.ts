@@ -2726,14 +2726,166 @@ export async function generateSceneImageWithNvidiaNimAsync(params: {
 }
 
 /**
- * Generates real Spanish/English TTS voiceover + comedic SFX for a scene, then animates the scene
- * keyframe with cinematic 24fps camera motion (`zoompan` / `shake`) and stitches all scenes into a
- * single 60-second vertical 9:16 MP4 video with burned-in ASS subtitles!
+ * Builds a rich Cyanide & Happiness ("Explosm") + Native Spanish Lip-Sync Dialogue prompt for
+ * Grok Imagine Video (`grok-imagine-video`) or Google Flow Veo 3.1.
+ */
+function buildGenerativeVideoPromptForScene(sc: StorySceneSpec, idx: number): string {
+  const baseStyle =
+    '2D Cyanide and Happiness Explosm cartoon animation style, flat vector 2D stickman characters with warm peach round heads, colored rectangular shirts, and thick black outlines, expressive animated mouths and eyes';
+
+  const lines = Array.isArray(sc.dialogueLines) && sc.dialogueLines.length > 0
+    ? sc.dialogueLines
+    : String(sc.narrationText || '')
+        .split(/\s*(?:—|-|\n)\s*/)
+        .filter((s) => s.trim().length > 2)
+        .map((text, i) => ({ speakerIndex: i % 2, text: text.trim() }));
+
+  let settingDesc =
+    'hanging from a vertical climbing rope on a rocky mountain cliff against a pale blue sky with white wind clouds';
+  if (idx === 0 || sc.actionType === 'CYANIDE_CLIFF_OPENING') {
+    settingDesc =
+      'hanging from a vertical climbing rope on a rocky mountain cliff. The top character wears a yellow shirt and orange ski goggles and holds a knife, and below him is a character in a red shirt';
+  } else if (idx === 1 || sc.actionType === 'CYANIDE_KNIFE_ARGUMENT') {
+    settingDesc =
+      'close-up of two 2D stickman characters hanging on a vertical climbing rope on a cliff: top character in yellow shirt with orange ski goggles waving a knife in panic, bottom character in red shirt arguing back';
+  } else if (idx === 2 || sc.actionType === 'CYANIDE_PASS_KNIFE_PURPLE') {
+    settingDesc =
+      'two 2D stickman characters hanging on a vertical climbing rope: character in a red shirt passing a knife down to a sarcastic character in a purple shirt below him';
+  } else if (idx === 3 || sc.actionType === 'CYANIDE_PIANO_REVEAL') {
+    settingDesc =
+      'a huge black grand piano with white and black keys and a wooden bench tied upside-down to a climbing rope on a cliff, with a 2D stickman pianist hanging upside-down shouting angrily while a purple shirt character looks down from above';
+  } else if (idx === 4 || sc.actionType === 'CYANIDE_COUPLE_GLASSES') {
+    settingDesc =
+      'two 2D stickman characters hanging on a vertical climbing rope: a woman in a pink shirt with brown curly hair and round glasses shouting indignantly, and a man in a cyan plaid shirt with round glasses below her';
+  } else if (idx >= 5 || sc.actionType === 'CYANIDE_WIDE_TOWER_ZOOM') {
+    settingDesc =
+      'wide shot of a rocky mountain cliff wall showing multiple 2D stickman characters in yellow, red, and purple shirts plus a black grand piano all hanging in a vertical line on a climbing rope';
+  }
+
+  const d1 = lines[0]?.text || '¡Hay demasiado peso, tengo que cortar la cuerda!';
+  const d2 = lines[1]?.text || '¡Espera, abajo hay un piano de cola!';
+
+  return `${baseStyle}, ${settingDesc}. The first character shouts in Spanish with expressive lip-sync: '${d1}' and the second character replies in Spanish with expressive lip-sync: '${d2}'`;
+}
+
+/**
+ * Generates a single scene MP4 using xAI Grok Imagine Video (`grok-imagine-video`) with native
+ * Spanish theatrical voice acting, native lip-sync, and native ambient sound effects (Google Flow / Veo style).
+ */
+async function generateSceneClipWithGrokFlowVideoAsync(params: {
+  scene: StorySceneSpec;
+  sceneIndex: number;
+  outputMp4Path: string;
+  durationSec?: number;
+}): Promise<boolean> {
+  const apiKey = (process.env.XAI_API_KEY || DEFAULT_XAI_GROK_KEY || '').trim();
+  if (!apiKey) return false;
+
+  const prompt = buildGenerativeVideoPromptForScene(params.scene, params.sceneIndex);
+  const dur = Math.max(5, Math.min(8, Math.round(Number(params.durationSec) || 6)));
+
+  try {
+    const startRes = await fetch('https://api.x.ai/v1/videos/generations', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'grok-imagine-video',
+        prompt,
+        duration: dur,
+      }),
+      signal: AbortSignal.timeout(25000),
+    });
+
+    if (!startRes.ok) return false;
+    const startData: any = await startRes.json();
+    const requestId = startData?.request_id;
+    if (!requestId) return false;
+
+    let videoUrl = '';
+    for (let poll = 0; poll < 28; poll++) {
+      await new Promise((r) => setTimeout(r, 3200));
+      const pollRes = await fetch(`https://api.x.ai/v1/videos/${requestId}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!pollRes.ok) continue;
+      const pollData: any = await pollRes.json();
+      if (pollData?.status === 'done' && pollData?.video?.url) {
+        videoUrl = String(pollData.video.url);
+        break;
+      }
+      if (pollData?.status === 'failed' || pollData?.status === 'error') {
+        return false;
+      }
+    }
+
+    if (!videoUrl) return false;
+
+    const dlRes = await fetch(videoUrl, { signal: AbortSignal.timeout(30000) });
+    if (!dlRes.ok) return false;
+    const rawBuf = Buffer.from(await dlRes.arrayBuffer());
+    if (rawBuf.length < 10000) return false;
+
+    const rawPath = `${params.outputMp4Path}.raw_grok.mp4`;
+    fs.writeFileSync(rawPath, rawBuf);
+
+    // Normalize to 1280x720 @ 30fps h264 + 44.1kHz stereo AAC so all scenes concatenate seamlessly
+    const normProc = await runCommandAsync(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',
+        rawPath,
+        '-vf',
+        'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-crf',
+        '19',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-ar',
+        '44100',
+        '-ac',
+        '2',
+        '-b:a',
+        '160k',
+        params.outputMp4Path,
+      ],
+      35000
+    );
+    try {
+      fs.unlinkSync(rawPath);
+    } catch {}
+
+    return (
+      normProc.status === 0 &&
+      fs.existsSync(params.outputMp4Path) &&
+      fs.statSync(params.outputMp4Path).size > 10000
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Generates real Spanish/English TTS voiceover + comedic SFX for a scene, or uses Generative Video AI
+ * (`grok-imagine-video` / Google Flow style) with native voice & lip-sync, and stitches all scenes into a
+ * continuous MP4 video!
  */
 export async function render60sStoryVideoFromScenesAsync(params: {
   scenes: StorySceneSpec[];
   outputDir: string;
   finalVideoPath: string;
+  stylePreset?: string;
   nvidiaApiKey?: string;
   seed?: number;
   voiceName?: string;
@@ -2754,73 +2906,148 @@ export async function render60sStoryVideoFromScenesAsync(params: {
   const useVoice = voice !== 'NONE' && voice !== 'MUTE';
   const defaultActions = defaultActionSequenceForProp('CLIFF_PIANO');
 
-  for (let i = 0; i < totalScenes; i++) {
-    const sc = params.scenes[i];
-    const basePct = Math.round(5 + (i / totalScenes) * 75);
-    const sceneDur = Math.max(4, Math.min(18, Number(sc.durationSec) || 10));
-    const resolvedAction: StickmanActionType =
-      sc.actionType && VALID_STICKMAN_ACTIONS.includes(sc.actionType)
-        ? sc.actionType
-        : defaultActions[i % defaultActions.length];
-    const resolvedProp: StickmanPropType =
-      sc.propType || inferPropTypeFromIdea(`${sc.title} ${sc.visualPrompt} ${sc.narrationText}`);
+  // Use Generative AI Video (Grok Imagine Video / Flow style with native Spanish acting & lip-sync)
+  // whenever stylePreset is GROK_FLOW_VIDEO or CYANIDE_EXPLOSM (unless classic canvas is explicitly requested)
+  const useGenerativeFlowVideo =
+    params.stylePreset !== 'MINT_DOOR_CLASSIC' &&
+    params.stylePreset !== 'CYANIDE_VECTOR_RIG' &&
+    voice !== 'NONE';
 
+  if (useGenerativeFlowVideo) {
     params.onProgress?.(
-      basePct,
-      `Animando Escena ${i + 1}/${totalScenes} a 30 FPS Cyanide & Happiness (${resolvedAction}: "${sc.title}")...`
+      12,
+      `Generando ${totalScenes} escenas en paralelo con IA Generativa (Voz Actuada en Español + Lip-Sync Nativo)...`
     );
 
-    const ttsPath = path.join(params.outputDir, `scene_${i + 1}_tts.mp3`);
-    let hasTts = false;
-    if (useVoice && sc.visualStyle === 'MINT_DOOR_CLASSIC' && sc.narrationText && sc.narrationText.trim().length > 0) {
-      try {
-        const ttsProc = await runCommandAsync(
-          'python3',
-          ['-m', 'edge_tts', '--voice', voice === 'MULTI_VOICE_CYANIDE' ? 'es-ES-AlvaroNeural' : voice, '--text', sc.narrationText.trim(), '--write-media', ttsPath],
-          20000
-        );
-        if (ttsProc.status === 0 && fs.existsSync(ttsPath) && fs.statSync(ttsPath).size > 500) {
-          hasTts = true;
-        }
-      } catch {}
-    }
+    // Run scenes in parallel batches of 3 for fast ~20s turnaround!
+    const batchSize = 3;
+    const grokSuccessFlags: boolean[] = new Array(totalScenes).fill(false);
 
-    if (useVoice && params.burnSubtitles) {
-      const words = (sc.narrationText || sc.title).split(/\s+/).filter(Boolean);
-      const speakSpan = Math.max(2.0, sceneDur - 0.8);
-      const wordStep = speakSpan / Math.max(words.length, 1);
-      words.forEach((w, wIdx) => {
-        allWords.push({
-          word: w,
-          start: Number((cumulativeSec + 0.3 + wIdx * wordStep).toFixed(2)),
-          end: Number((cumulativeSec + 0.3 + (wIdx + 1) * wordStep).toFixed(2)),
-          confidence: 0.98,
-          speaker: 'Narrador',
-          isFiller: false,
-        });
+    for (let b = 0; b < totalScenes; b += batchSize) {
+      const batchIndices = [];
+      for (let k = b; k < Math.min(totalScenes, b + batchSize); k++) {
+        batchIndices.push(k);
+      }
+      params.onProgress?.(
+        Math.round(15 + (b / totalScenes) * 60),
+        `Renderizando lote de escenas ${batchIndices.map((x) => x + 1).join(', ')}/${totalScenes} con Video Generativo IA + Lip-Sync...`
+      );
+      const results = await Promise.all(
+        batchIndices.map((idx) => {
+          const sceneMp4 = path.join(params.outputDir, `scene_${idx + 1}_clip.mp4`);
+          return generateSceneClipWithGrokFlowVideoAsync({
+            scene: params.scenes[idx],
+            sceneIndex: idx,
+            outputMp4Path: sceneMp4,
+            durationSec: 6,
+          });
+        })
+      );
+      batchIndices.forEach((idx, rIdx) => {
+        grokSuccessFlags[idx] = results[rIdx];
       });
     }
-    cumulativeSec += sceneDur;
 
-    const sceneMp4 = path.join(params.outputDir, `scene_${i + 1}_clip.mp4`);
-    await renderAnimatedStickmanSceneToMp4Async({
-      scene: {
-        sceneNumber: i + 1,
-        title: sc.title,
-        actionType: resolvedAction,
-        propType: resolvedProp,
-        durationSec: sceneDur,
-        narrationText: sc.narrationText,
-        visualStyle: sc.visualStyle || 'CYANIDE_EXPLOSM',
-        aspectRatio: sc.aspectRatio || '16:9',
-        dialogueLines: sc.dialogueLines,
-      },
-      outputMp4Path: sceneMp4,
-      voiceMp3Path: hasTts ? ttsPath : undefined,
-      fps: 30,
-    });
+    // For any scene where generative video didn't complete, fall back to the 30fps Cyanide 2D vector rig with PCM RMS Lip-Sync
+    for (let i = 0; i < totalScenes; i++) {
+      const sc = params.scenes[i];
+      const sceneMp4 = path.join(params.outputDir, `scene_${i + 1}_clip.mp4`);
+      if (!grokSuccessFlags[i]) {
+        const resolvedAction: StickmanActionType =
+          sc.actionType && VALID_STICKMAN_ACTIONS.includes(sc.actionType)
+            ? sc.actionType
+            : defaultActions[i % defaultActions.length];
+        const resolvedProp: StickmanPropType =
+          sc.propType || inferPropTypeFromIdea(`${sc.title} ${sc.visualPrompt} ${sc.narrationText}`);
+        await renderAnimatedStickmanSceneToMp4Async({
+          scene: {
+            sceneNumber: i + 1,
+            title: sc.title,
+            actionType: resolvedAction,
+            propType: resolvedProp,
+            durationSec: Math.max(5, Math.min(12, Number(sc.durationSec) || 7)),
+            narrationText: sc.narrationText,
+            visualStyle: 'CYANIDE_EXPLOSM',
+            aspectRatio: sc.aspectRatio || '16:9',
+            dialogueLines: sc.dialogueLines,
+          },
+          outputMp4Path: sceneMp4,
+          fps: 30,
+        });
+      }
+      const clipMeta = probeMediaWithFfprobe(sceneMp4);
+      cumulativeSec += clipMeta.durationSeconds || 6;
+      sceneClipPaths.push(sceneMp4);
+    }
+  } else {
+    for (let i = 0; i < totalScenes; i++) {
+      const sc = params.scenes[i];
+      const basePct = Math.round(5 + (i / totalScenes) * 75);
+      const sceneDur = Math.max(4, Math.min(18, Number(sc.durationSec) || 10));
+      const resolvedAction: StickmanActionType =
+        sc.actionType && VALID_STICKMAN_ACTIONS.includes(sc.actionType)
+          ? sc.actionType
+          : defaultActions[i % defaultActions.length];
+      const resolvedProp: StickmanPropType =
+        sc.propType || inferPropTypeFromIdea(`${sc.title} ${sc.visualPrompt} ${sc.narrationText}`);
 
-    sceneClipPaths.push(sceneMp4);
+      params.onProgress?.(
+        basePct,
+        `Animando Escena ${i + 1}/${totalScenes} a 30 FPS Cyanide & Happiness (${resolvedAction}: "${sc.title}")...`
+      );
+
+      const ttsPath = path.join(params.outputDir, `scene_${i + 1}_tts.mp3`);
+      let hasTts = false;
+      if (useVoice && sc.visualStyle === 'MINT_DOOR_CLASSIC' && sc.narrationText && sc.narrationText.trim().length > 0) {
+        try {
+          const ttsProc = await runCommandAsync(
+            'python3',
+            ['-m', 'edge_tts', '--voice', voice === 'MULTI_VOICE_CYANIDE' ? 'es-ES-AlvaroNeural' : voice, '--text', sc.narrationText.trim(), '--write-media', ttsPath],
+            20000
+          );
+          if (ttsProc.status === 0 && fs.existsSync(ttsPath) && fs.statSync(ttsPath).size > 500) {
+            hasTts = true;
+          }
+        } catch {}
+      }
+
+      if (useVoice && params.burnSubtitles) {
+        const words = (sc.narrationText || sc.title).split(/\s+/).filter(Boolean);
+        const speakSpan = Math.max(2.0, sceneDur - 0.8);
+        const wordStep = speakSpan / Math.max(words.length, 1);
+        words.forEach((w, wIdx) => {
+          allWords.push({
+            word: w,
+            start: Number((cumulativeSec + 0.3 + wIdx * wordStep).toFixed(2)),
+            end: Number((cumulativeSec + 0.3 + (wIdx + 1) * wordStep).toFixed(2)),
+            confidence: 0.98,
+            speaker: 'Narrador',
+            isFiller: false,
+          });
+        });
+      }
+      cumulativeSec += sceneDur;
+
+      const sceneMp4 = path.join(params.outputDir, `scene_${i + 1}_clip.mp4`);
+      await renderAnimatedStickmanSceneToMp4Async({
+        scene: {
+          sceneNumber: i + 1,
+          title: sc.title,
+          actionType: resolvedAction,
+          propType: resolvedProp,
+          durationSec: sceneDur,
+          narrationText: sc.narrationText,
+          visualStyle: sc.visualStyle || 'CYANIDE_EXPLOSM',
+          aspectRatio: sc.aspectRatio || '16:9',
+          dialogueLines: sc.dialogueLines,
+        },
+        outputMp4Path: sceneMp4,
+        voiceMp3Path: hasTts ? ttsPath : undefined,
+        fps: 30,
+      });
+
+      sceneClipPaths.push(sceneMp4);
+    }
   }
 
   params.onProgress?.(85, `Uniendo las ${totalScenes} escenas en un video continuo de ${Math.round(cumulativeSec)}s...`);

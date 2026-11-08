@@ -362,10 +362,9 @@ export default function AiMontagePage() {
                     onChange={(e) => setStylePreset(e.target.value)}
                     className="w-full rounded-xl border border-zinc-700 bg-[#0E1015] px-3 py-2 text-xs font-semibold text-white"
                   >
-                    <option value="CYANIDE_EXPLOSM">🔥 Cyanide & Happiness 2D (Multi-Personaje + Lip-Sync)</option>
-                    <option value="MINT_DOOR_CLASSIC">Stickman Clásico (Fondo Menta + Puerta)</option>
-                    <option value="CARTOON_3D">Cartoon 3D Estilo Pixar</option>
-                    <option value="ANIME_ACTION">Anime 2D Expresivo</option>
+                    <option value="CYANIDE_EXPLOSM">🔥 Video Generativo IA (Estilo Flow + Voz Actuada & Lip-Sync Nativo)</option>
+                    <option value="CYANIDE_VECTOR_RIG">🎨 Rig Vectorial 2D 30fps (Lip-Sync por Onda de Audio PCM)</option>
+                    <option value="MINT_DOOR_CLASSIC">🚪 Stickman Clásico (Fondo Menta + Puerta)</option>
                   </select>
                 </div>
 

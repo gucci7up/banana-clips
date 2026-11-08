@@ -732,13 +732,53 @@ export interface SpeakerTimelineSegment {
 }
 
 const SPANISH_CHARACTER_VOICES: Array<{ voice: string; pitch: string; rate: string }> = [
-  { voice: 'es-ES-AlvaroNeural', pitch: '+7Hz', rate: '+14%' }, // 0: Yellow Goggles Guy (panicked / energetic)
-  { voice: 'es-MX-JorgeNeural', pitch: '-5Hz', rate: '+10%' },  // 1: Red Shirt Guy (skeptical / intense)
-  { voice: 'es-AR-TomasNeural', pitch: '+2Hz', rate: '+12%' },  // 2: Purple Shirt Guy (sarcastic / sharp)
-  { voice: 'es-CO-GonzaloNeural', pitch: '-12Hz', rate: '+8%' }, // 3: Upside-down Pianist (dramatic / outraged)
-  { voice: 'es-CL-LorenzoNeural', pitch: '-3Hz', rate: '+10%' }, // 4: Glasses Guy
-  { voice: 'es-ES-ElviraNeural', pitch: '+9Hz', rate: '+12%' },  // 5: Glasses Lady
+  { voice: 'es-ES-AlvaroNeural', pitch: '+0Hz', rate: '+8%' },  // 0: Yellow Goggles Guy
+  { voice: 'es-MX-JorgeNeural', pitch: '+0Hz', rate: '+6%' },   // 1: Red Shirt Guy
+  { voice: 'es-AR-TomasNeural', pitch: '+0Hz', rate: '+8%' },   // 2: Purple Shirt Guy
+  { voice: 'es-CO-GonzaloNeural', pitch: '+0Hz', rate: '+5%' }, // 3: Upside-down Pianist
+  { voice: 'es-CL-LorenzoNeural', pitch: '+0Hz', rate: '+6%' }, // 4: Glasses Guy
+  { voice: 'es-ES-ElviraNeural', pitch: '+0Hz', rate: '+8%' },  // 5: Glasses Lady
 ];
+
+/**
+ * Extracts a frame-accurate RMS audio amplitude envelope (0.0 to 1.0) at `fps` frames per second
+ * directly from an audio file using FFmpeg raw PCM s16le output.
+ * Guarantees that the character's mouth is 100% closed during silence/pauses and opens
+ * proportionally to the exact syllable volume on each frame.
+ */
+export function extractAudioFrameRmsEnvelopeSync(
+  audioPath: string,
+  fps: number,
+  totalFrames: number
+): number[] {
+  const envelope = new Array<number>(totalFrames).fill(0);
+  if (!audioPath || !fs.existsSync(audioPath)) return envelope;
+
+  try {
+    const sampleRate = fps * 100; // 100 PCM samples per video frame
+    const pcmBuf = execFileSync(
+      'ffmpeg',
+      ['-v', 'error', '-i', audioPath, '-f', 's16le', '-ac', '1', '-ar', String(sampleRate), 'pipe:1'],
+      { maxBuffer: 16 * 1024 * 1024, timeout: 10000 }
+    );
+    const totalSamples = Math.floor(pcmBuf.length / 2);
+    for (let f = 0; f < totalFrames; f++) {
+      const startSample = f * 100;
+      if (startSample >= totalSamples) break;
+      const endSample = Math.min(totalSamples, startSample + 100);
+      let sumSq = 0;
+      for (let s = startSample; s < endSample; s++) {
+        const val = pcmBuf.readInt16LE(s * 2) / 32768.0;
+        sumSq += val * val;
+      }
+      const rms = Math.sqrt(sumSq / Math.max(1, endSample - startSample));
+      // Noise gate at 0.025 so mouth stays completely shut during pauses between words
+      envelope[f] = rms < 0.025 ? 0 : Math.min(1.0, (rms - 0.02) * 4.2);
+    }
+  } catch {}
+
+  return envelope;
+}
 
 export async function synthesizeMultiCharacterSceneDialogueAsync(params: {
   dialogueLines: CyanideDialogueLine[];
@@ -848,17 +888,16 @@ function renderCyanideExplosmFrame(
   scene: StickmanChoreographyScene,
   u: number,
   timeSec: number,
-  segments: SpeakerTimelineSegment[]
+  segments: SpeakerTimelineSegment[],
+  frameVoiceOpen: number
 ) {
   // Determine who is currently speaking at `timeSec`
   const activeSeg = segments.find((s) => timeSec >= s.startSec && timeSec <= s.endSec);
   const activeSpeaker = activeSeg ? activeSeg.speakerIndex : -1;
 
-  // Syllabic lip-sync oscillation (11 Hz + 17 Hz harmonic) when character is speaking
-  const syllabicOpen =
-    activeSpeaker >= 0
-      ? Math.max(0.15, Math.min(1.0, 0.55 + 0.42 * Math.sin(timeSec * 36) * Math.cos(timeSec * 19)))
-      : 0;
+  // Frame-accurate PCM RMS audio waveform lip-sync!
+  // Only opens when the actual voice waveform has energy on this exact 1/30s video frame.
+  const syllabicOpen = activeSpeaker >= 0 ? frameVoiceOpen : 0;
 
   // Gentle rope pendulum sway
   const ropeSwayX = Math.sin(timeSec * 1.9) * 10;
@@ -1455,17 +1494,21 @@ export async function renderAnimatedStickmanSceneToMp4Async(params: {
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
 
-  // Ambient mountain wind + rope creak + piano chord (when piano is on screen)
-  let sfxExpr = `0.03*sin(2*PI*(110+25*sin(2*PI*0.7*t))*t)+0.02*random(0)`;
-  if (params.scene.actionType === 'CYANIDE_PIANO_REVEAL' || params.scene.sceneNumber === 4 || params.scene.sceneNumber >= 6) {
-    // Dramatic C-minor piano chord + wind
-    sfxExpr = `0.06*(sin(2*PI*261.6*t)+sin(2*PI*311.1*t)+sin(2*PI*392.0*t))*exp(-0.8*mod(t,2.5))+0.02*random(0)`;
+  // Soft natural mountain wind breath (no oscillating siren!) + subtle piano chord on Scene 4
+  let sfxExpr = `0.008*random(0)`;
+  if (params.scene.actionType === 'CYANIDE_PIANO_REVEAL' || params.scene.sceneNumber === 4) {
+    sfxExpr = `0.04*(sin(2*PI*261.6*t)+sin(2*PI*311.1*t)+sin(2*PI*392.0*t))*exp(-1.4*t)+0.008*random(0)`;
   }
 
   const hasVoice =
     effectiveVoiceMp3 &&
     fs.existsSync(effectiveVoiceMp3) &&
     fs.statSync(effectiveVoiceMp3).size > 400;
+
+  // Extract 1:1 frame-accurate PCM RMS lip-sync envelope from the voice audio
+  const frameRmsEnvelope = hasVoice
+    ? extractAudioFrameRmsEnvelopeSync(effectiveVoiceMp3!, fps, totalFrames)
+    : new Array<number>(totalFrames).fill(0);
 
   const ffArgs: string[] = [
     '-y',
@@ -1550,7 +1593,8 @@ export async function renderAnimatedStickmanSceneToMp4Async(params: {
         const timeSec = frameIdx / fps;
 
         if (useCyanideStyle) {
-          renderCyanideExplosmFrame(ctx, W, H, params.scene, u, timeSec, segments);
+          const frameVoiceOpen = frameRmsEnvelope[frameIdx] || 0;
+          renderCyanideExplosmFrame(ctx, W, H, params.scene, u, timeSec, segments, frameVoiceOpen);
         } else {
           const pose = evaluateStickmanScenePose(params.scene.actionType, u, timeSec);
           ctx.save();
