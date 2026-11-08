@@ -1134,8 +1134,88 @@ export function mixBackgroundMusicWithAutoDucking(videoPath: string, musicPath: 
   }
 }
 
+export const DEFAULT_XAI_GROK_KEY = process.env.XAI_API_KEY || '';
+
 /**
- * Translates a clip's transcript into target language via NVIDIA NIM LLM (or deterministic fallback),
+ * Calls xAI Grok API (`grok-4.20-0309-non-reasoning` by default for ultra-fast, low-token cost execution)
+ */
+export async function callGrokXaiChatAsync(params: {
+  systemPrompt: string;
+  userPrompt: string;
+  maxTokens?: number;
+  temperature?: number;
+  model?: string;
+  xaiApiKey?: string;
+}): Promise<string | null> {
+  const apiKey = (params.xaiApiKey || DEFAULT_XAI_GROK_KEY).trim();
+  if (!apiKey) return null;
+  try {
+    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: JSON.stringify({
+        model: params.model || 'grok-4.20-0309-non-reasoning',
+        messages: [
+          { role: 'system', content: params.systemPrompt },
+          { role: 'user', content: params.userPrompt },
+        ],
+        max_tokens: params.maxTokens || 280,
+        temperature: params.temperature ?? 0.65,
+      }),
+      signal: AbortSignal.timeout(14000),
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      const text = String(data?.choices?.[0]?.message?.content || '').trim();
+      if (text.length > 2) return text;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Uses Grok xAI to craft a spicy, high-retention 5-6 word Hook Banner & Viral Clip Title from a live/video transcript snippet.
+ */
+export async function generateViralHookWithGrokAsync(
+  transcriptSnippet: string,
+  fallbackTitle: string
+): Promise<{ hookBanner: string; viralTitle: string }> {
+  const clean = (transcriptSnippet || '').replace(/\s+/g, ' ').trim();
+  const defaultWords = (clean || fallbackTitle).replace(/[¿?¡!.,[\]"]/g, '').split(/\s+/).filter(Boolean).slice(0, 6).join(' ');
+  if (clean.length < 12) {
+    return { hookBanner: defaultWords || 'MOMENTO VIRAL EN DIRECTO', viralTitle: fallbackTitle };
+  }
+
+  const grokOut = await callGrokXaiChatAsync({
+    systemPrompt:
+      'You are Grok, an elite viral short-form video editor. Given a speech snippet, return ONLY valid JSON: {"hook":"5 TO 6 WORD SPICY UPPERCASE HOOK IN SAME LANGUAGE","title":"Punchy viral title with 1 emoji"}',
+    userPrompt: `Snippet (${ fallbackTitle }): "${clean.slice(0, 320)}"`,
+    maxTokens: 90,
+    temperature: 0.7,
+  });
+
+  if (grokOut) {
+    try {
+      const m = grokOut.match(/\{[\s\S]*\}/);
+      if (m) {
+        const parsed = JSON.parse(m[0]);
+        const h = String(parsed.hook || '').replace(/["{}]/g, '').trim().toUpperCase().slice(0, 48);
+        const t = String(parsed.title || '').trim().slice(0, 110);
+        if (h.length >= 4) {
+          return { hookBanner: h, viralTitle: t || fallbackTitle };
+        }
+      }
+    } catch {}
+  }
+
+  return { hookBanner: defaultWords || 'MOMENTO VIRAL EN DIRECTO', viralTitle: fallbackTitle };
+}
+
+/**
+ * Translates a clip's transcript into target language via Grok xAI / NVIDIA NIM LLM,
  * synthesizes Neural TTS via edge-tts, and mixes it over the original video with Audio Ducking (original at 18%, dub at 145%).
  */
 export async function applyVoiceDubbingToClipAsync(params: {
@@ -1173,35 +1253,47 @@ export async function applyVoiceDubbingToClipAsync(params: {
   const apiKey = (params.nvidiaApiKey || DEFAULT_NVIDIA_NIM_KEY).trim();
 
   let translatedText = cleanSource;
-  try {
-    const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'nvidia/nemotron-3.5-bolt-e4b',
-        messages: [
-          {
-            role: 'system',
-            content: `Eres un actor de doblaje profesional. Traduce el siguiente texto hablado a ${langLabel} manteniendo el tono enérgico, natural y conciso para doblaje sincronizado. Devuelve ÚNICAMENTE el texto traducido sin comillas ni explicaciones.`,
-          },
-          { role: 'user', content: cleanSource },
-        ],
-        max_tokens: 400,
-        temperature: 0.35,
-      }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (res.ok) {
-      const data: any = await res.json();
-      const candidate = String(data?.choices?.[0]?.message?.content || '').trim();
-      if (candidate.length > 4) {
-        translatedText = candidate.replace(/^["«]|["»]$/g, '').trim();
+  // 1. Try Grok xAI first for fast, natural dubbing translation
+  const grokTranslated = await callGrokXaiChatAsync({
+    systemPrompt: `Eres un actor de doblaje profesional. Traduce el texto hablado a ${langLabel} manteniendo la intensidad, emoción y ritmo natural para doblaje de voz. Devuelve ÚNICAMENTE el texto traducido sin comillas.`,
+    userPrompt: cleanSource.slice(0, 500),
+    maxTokens: 220,
+    temperature: 0.35,
+  });
+
+  if (grokTranslated && grokTranslated.length > 4) {
+    translatedText = grokTranslated.replace(/^["«*]+|["»*]+$/g, '').trim();
+  } else {
+    try {
+      const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'nvidia/nemotron-3.5-bolt-e4b',
+          messages: [
+            {
+              role: 'system',
+              content: `Eres un actor de doblaje profesional. Traduce el siguiente texto hablado a ${langLabel} manteniendo el tono enérgico, natural y conciso para doblaje sincronizado. Devuelve ÚNICAMENTE el texto traducido sin comillas ni explicaciones.`,
+            },
+            { role: 'user', content: cleanSource },
+          ],
+          max_tokens: 400,
+          temperature: 0.35,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) {
+        const data: any = await res.json();
+        const candidate = String(data?.choices?.[0]?.message?.content || '').trim();
+        if (candidate.length > 4) {
+          translatedText = candidate.replace(/^["«]|["»]$/g, '').trim();
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   const ttsMp3Path = `${params.videoPath}.dub.mp3`;
   const tmpDubVideoPath = `${params.videoPath}.dubbed.mp4`;

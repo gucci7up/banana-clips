@@ -11,6 +11,7 @@ import {
   extractRealSubtitlesIfPresent,
   generateAssSubtitles,
   generateThumbnailFfmpeg,
+  generateViralHookWithGrokAsync,
   getStorageRoot,
   probeMediaWithFfprobe,
   renderClipWithFfmpeg,
@@ -779,8 +780,19 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       const thumbFileRel = `banana-thumbnails/clip_${clipId}.jpg`;
       const thumbFileAbs = path.join(storageRoot, thumbFileRel);
 
-      const cleanHeadline = cand.text.replace(/[¿?¡!.,[\]]/g, '').split(/\s+/).filter(Boolean).slice(0, 7).join(' ');
-      const title = `Clip #${i + 1}: ${cleanHeadline}`;
+      let cleanHeadline = cand.text.replace(/[¿?¡!.,[\]]/g, '').split(/\s+/).filter(Boolean).slice(0, 7).join(' ');
+      let title = `Clip #${i + 1}: ${cleanHeadline}`;
+      try {
+        const grokHook = await generateViralHookWithGrokAsync(cand.text, title);
+        if (grokHook.hookBannerText) {
+          cleanHeadline = grokHook.hookBannerText;
+        }
+        if (grokHook.clickbaitTitle) {
+          title = `🔥 Clip #${i + 1}: ${grokHook.clickbaitTitle}`;
+        }
+      } catch {
+        // Fallback to transcript headline
+      }
 
       const { srt: clipSrt, vtt: clipVtt } = buildSrtAndVttFromWords(cand.words, 4);
       const assContent = generateAssSubtitles(cand.words, selectedSubtitleStyle, assPlayResX, assPlayResY, {

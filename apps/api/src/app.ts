@@ -16,6 +16,7 @@ import { SUBTITLE_TEMPLATES, validateSafeExternalUrl } from '@banana/shared';
 import {
   applyVoiceDubbingToClipAsync,
   buildPremiereXmlForClip,
+  callGrokXaiChatAsync,
   captureLiveStreamSegmentAsync,
   computeEmbedding384,
   cosineSimilarity,
@@ -24,6 +25,7 @@ import {
   generateAssSubtitles,
   generateStoryboardWithNvidiaNimAsync,
   generateThumbnailFfmpeg,
+  generateViralHookWithGrokAsync,
   getStorageRoot,
   onJobProgress,
   probeMediaWithFfprobe,
@@ -1934,12 +1936,11 @@ export async function createBananaApiApp(): Promise<Express> {
         const thumbFileAbs = path.join(storageRoot, thumbFileRel);
         const assPath = path.join(storageRoot, 'banana-clips', `live_subs_${clipId}.ass`);
 
-        const liveHookHeadline = (bestSummary || finalWords.map((w) => w.word).join(' '))
-          .replace(/[¿?¡!.,[\]"]/g, '')
-          .split(/\s+/)
-          .filter(Boolean)
-          .slice(0, 6)
-          .join(' ');
+        const grokHook = await generateViralHookWithGrokAsync(
+          bestSummary || finalWords.map((w) => w.word).join(' '),
+          params.sessionTitle
+        );
+        const liveHookHeadline = grokHook.hookBanner;
         const assContent = generateAssSubtitles(finalWords, SUBTITLE_TEMPLATES.Bold, 1080, 1920, {
           autoEmojis: true,
           hookBannerText: liveHookHeadline || params.sessionTitle,
@@ -2726,6 +2727,8 @@ export async function createBananaApiApp(): Promise<Express> {
     let generatedTitle = '';
     let generatedCaption = '';
     let generatedHashtags: string[] = [];
+    let generatedXThread: string[] = [];
+    let aiEngineUsed = 'Grok 4.20 (xAI)';
     let bestTimeSlot = '19:30';
 
     const bestTimesByPlatform: Record<string, string> = {
@@ -2738,34 +2741,21 @@ export async function createBananaApiApp(): Promise<Express> {
     };
     bestTimeSlot = bestTimesByPlatform[platform] || '19:30 (Pico Viral +42%)';
 
-    try {
-      const sysPrompt =
-        language === 'en'
-          ? `You are an elite viral social media copywriter (like Ocoya Travis AI). Write a viral post for ${platform} in English with tone ${tone}. Respond ONLY with valid JSON: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...]}`
-          : `Eres un copywriter experto en viralidad de redes sociales (estilo Ocoya Travis AI). Redacta un post ultra atractivo para ${platform} en idioma ${language} con tono ${tone}. Responde ÚNICAMENTE con JSON válido: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...]}`;
+    const grokSysPrompt =
+      language === 'en'
+        ? `You are Grok (xAI), an edgy, razor-sharp viral social media strategist. Write a high-engagement post for ${platform} in English with tone ${tone}. Respond ONLY with valid JSON: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...],"xThread":["1/3 Hook tweet...","2/3 Key breakdown...","3/3 Spicy debate question..."]}`
+        : `Eres Grok (xAI), un estratega experto en viralidad de redes sociales con tono directo, magnético y sin relleno corporativo. Redacta un post ultra atractivo para ${platform} en idioma ${language} con tono ${tone}. Responde ÚNICAMENTE con JSON válido: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...],"xThread":["1/3 Tweet gancho explosivo...","2/3 Datos o contexto clave...","3/3 Pregunta polémica de debate..."]}`;
 
-      const nimResp = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${nvidiaKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'meta/llama-3.1-70b-instruct',
-          messages: [
-            { role: 'system', content: sysPrompt },
-            { role: 'user', content: `Contexto del video/clip: ${contextText.slice(0, 600)}` },
-          ],
-          temperature: 0.7,
-          max_tokens: 450,
-        }),
-        signal: AbortSignal.timeout(12000),
-      });
+    const grokRaw = await callGrokXaiChatAsync({
+      systemPrompt: grokSysPrompt,
+      userPrompt: `Contexto del video/clip: ${contextText.slice(0, 600)}`,
+      maxTokens: 380,
+      temperature: tone === 'GROK_SPICY' ? 0.85 : 0.7,
+    });
 
-      if (nimResp.ok) {
-        const nimData: any = await nimResp.json();
-        const rawText = nimData?.choices?.[0]?.message?.content || '';
-        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (grokRaw) {
+      try {
+        const jsonMatch = grokRaw.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
           generatedTitle = String(parsed.title || '').trim();
@@ -2773,9 +2763,54 @@ export async function createBananaApiApp(): Promise<Express> {
           if (Array.isArray(parsed.hashtags)) {
             generatedHashtags = parsed.hashtags.map((h: any) => (String(h).startsWith('#') ? String(h) : `#${h}`));
           }
+          if (Array.isArray(parsed.xThread)) {
+            generatedXThread = parsed.xThread.map((t: any) => String(t).trim()).filter(Boolean);
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
+
+    if (!generatedTitle || !generatedCaption) {
+      aiEngineUsed = 'NVIDIA NIM Fallback';
+      try {
+        const sysPrompt =
+          language === 'en'
+            ? `You are an elite viral social media copywriter (like Ocoya Travis AI). Write a viral post for ${platform} in English with tone ${tone}. Respond ONLY with valid JSON: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...]}`
+            : `Eres un copywriter experto en viralidad de redes sociales (estilo Ocoya Travis AI). Redacta un post ultra atractivo para ${platform} en idioma ${language} con tono ${tone}. Responde ÚNICAMENTE con JSON válido: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...]}`;
+
+        const nimResp = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${nvidiaKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'meta/llama-3.1-70b-instruct',
+            messages: [
+              { role: 'system', content: sysPrompt },
+              { role: 'user', content: `Contexto del video/clip: ${contextText.slice(0, 600)}` },
+            ],
+            temperature: 0.7,
+            max_tokens: 450,
+          }),
+          signal: AbortSignal.timeout(12000),
+        });
+
+        if (nimResp.ok) {
+          const nimData: any = await nimResp.json();
+          const rawText = nimData?.choices?.[0]?.message?.content || '';
+          const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            generatedTitle = String(parsed.title || '').trim();
+            generatedCaption = String(parsed.caption || '').trim();
+            if (Array.isArray(parsed.hashtags)) {
+              generatedHashtags = parsed.hashtags.map((h: any) => (String(h).startsWith('#') ? String(h) : `#${h}`));
+            }
+          }
+        }
+      } catch {}
+    }
 
     if (!generatedTitle || !generatedCaption) {
       const cleanSnippet = contextText.replace(/🔥|Highlight #\d+|\[Min [^\]]+\]:?/gi, '').replace(/"/g, '').trim();
@@ -2810,10 +2845,20 @@ export async function createBananaApiApp(): Promise<Express> {
       }
     }
 
+    if (generatedXThread.length === 0) {
+      generatedXThread = [
+        `1/3 🚨 ${generatedTitle}`,
+        `2/3 🎙️ Lo que acaba de decirse en directo: "${contextText.slice(0, 160)}..."`,
+        `3/3 💬 ¿Estás de acuerdo o crees que se pasó de la raya? Te leo en las respuestas 👇 ${(generatedHashtags || []).slice(0, 3).join(' ')}`,
+      ];
+    }
+
     return res.json({
       title: generatedTitle,
       caption: generatedCaption,
       hashtags: generatedHashtags,
+      xThread: generatedXThread,
+      aiEngineUsed,
       bestTimeRecommendation: bestTimeSlot,
       platform,
       tone,

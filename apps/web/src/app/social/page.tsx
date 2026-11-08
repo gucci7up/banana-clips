@@ -35,6 +35,8 @@ export default function SocialPublishingPage() {
   const [title, setTitle] = useState('');
   const [caption, setCaption] = useState('');
   const [hashtags, setHashtags] = useState<string[]>(['#viral', '#shorts', '#fyp', '#parati']);
+  const [xThread, setXThread] = useState<string[]>([]);
+  const [aiEngineUsed, setAiEngineUsed] = useState('Grok 4.20 (xAI)');
   const [bestTimeRec, setBestTimeRec] = useState('19:30 (Pico Viral +46%)');
   const [scheduledAt, setScheduledAt] = useState('');
 
@@ -94,6 +96,8 @@ export default function SocialPublishingPage() {
         title: string;
         caption: string;
         hashtags: string[];
+        xThread?: string[];
+        aiEngineUsed?: string;
         bestTimeRecommendation: string;
       }>('/social/ai-copywriter', {
         method: 'POST',
@@ -108,6 +112,8 @@ export default function SocialPublishingPage() {
       setTitle(res.title);
       setCaption(res.caption);
       setHashtags(res.hashtags || []);
+      setXThread(res.xThread || []);
+      if (res.aiEngineUsed) setAiEngineUsed(res.aiEngineUsed);
       setBestTimeRec(res.bestTimeRecommendation || '19:30 (Pico Viral +45%)');
     } catch (err: any) {
       setNotice(err.message || 'Error al generar copy con IA');
@@ -368,10 +374,10 @@ export default function SocialPublishingPage() {
           <div className="studio-card space-y-4 p-5 lg:col-span-5">
             <div className="flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-sm font-extrabold text-[#FFD43B]">
-                <Sparkles className="h-4 w-4" /> Asistente AI Copywriter (NVIDIA NIM)
+                <Sparkles className="h-4 w-4" /> Asistente AI Copywriter ({aiEngineUsed})
               </h2>
               <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400">
-                28+ Idiomas
+                ⚡ Grok 4.20 + 28 Idiomas
               </span>
             </div>
 
@@ -431,7 +437,8 @@ export default function SocialPublishingPage() {
                   onChange={(e) => setTone(e.target.value)}
                   className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0B0D12] p-2.5 text-xs font-bold text-white"
                 >
-                  <option value="VIRAL">🔥 Viral & Polémico</option>
+                  <option value="VIRAL">🔥 Viral & Polémico (Grok)</option>
+                  <option value="GROK_SPICY">🌶️ Modo Grok Sin Filtro (Polémico X)</option>
                   <option value="URGENT">🚨 Breaking News</option>
                   <option value="HUMOR">😂 Humor & Comedia</option>
                   <option value="EDUCATIONAL">📚 Educativo / Valor</option>
@@ -552,6 +559,36 @@ export default function SocialPublishingPage() {
                   ))}
                 </div>
               </div>
+
+              {xThread.length > 0 && (
+                <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-sky-400">
+                      🧵 Hilo Viral para X (Twitter) — Generado con {aiEngineUsed}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(xThread.join('\n\n'));
+                        setStatusToast('📋 ¡Hilo de 3 Tweets copiado al portapapeles!');
+                      }}
+                      className="rounded-lg bg-sky-500/20 px-2.5 py-1 text-[10px] font-bold text-sky-300 hover:bg-sky-500/30"
+                    >
+                      📋 Copiar Hilo Completo
+                    </button>
+                  </div>
+                  <div className="space-y-1.5">
+                    {xThread.map((tweet, idx) => (
+                      <div
+                        key={idx}
+                        className="rounded-lg border border-slate-800 bg-[#0B0D12]/90 p-2 text-[11px] text-slate-200"
+                      >
+                        {tweet}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 pt-1">
                 <div>
