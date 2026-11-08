@@ -2350,10 +2350,24 @@ export interface StorySceneSpec {
   sfxType: 'EFFORT' | 'KNOCK' | 'CLANG' | 'EXPLOSION' | 'DOOR_CREAK' | 'LAUGH';
   actionType?: StickmanActionType;
   propType?: StickmanPropType;
+  visualStyle?: 'CYANIDE_EXPLOSM' | 'MINT_DOOR_CLASSIC';
+  aspectRatio?: '16:9' | '9:16';
+  dialogueLines?: Array<{
+    speakerIndex: number;
+    text: string;
+    emotion?: 'PANIC' | 'ANGRY' | 'SARCASTIC' | 'SHOCKED' | 'DEADPAN' | 'SMUG';
+  }>;
   durationSec: number;
 }
 
 const VALID_STICKMAN_ACTIONS: StickmanActionType[] = [
+  'CYANIDE_CLIFF_OPENING',
+  'CYANIDE_KNIFE_ARGUMENT',
+  'CYANIDE_PASS_KNIFE_PURPLE',
+  'CYANIDE_PIANO_REVEAL',
+  'CYANIDE_COUPLE_GLASSES',
+  'CYANIDE_WIDE_TOWER_ZOOM',
+  'CYANIDE_DIALOGUE_BANTER',
   'WALK_CONFIDENT',
   'PULL_HANDLE_HARD',
   'BRACE_FOOT_AND_FALL',
@@ -2367,13 +2381,25 @@ const VALID_STICKMAN_ACTIONS: StickmanActionType[] = [
 ];
 
 function inferPropTypeFromIdea(idea: string): StickmanPropType {
+  if (/cuerda|precipicio|montaña|piano|cliff|colgado|escalar/i.test(idea)) return 'CLIFF_PIANO';
   if (/mosquito|zancudo|dormir|buzz/i.test(idea)) return 'MOSQUITO';
   if (/araña|spider|insecto|bicho/i.test(idea)) return 'SPIDER';
   if (/gimnasio|gym|pesa|barra|kilos|levantar/i.test(idea)) return 'GYM_BARBELL';
-  return 'DOOR';
+  if (/puerta|door/i.test(idea)) return 'DOOR';
+  return 'CLIFF_PIANO';
 }
 
 function defaultActionSequenceForProp(prop: StickmanPropType): StickmanActionType[] {
+  if (prop === 'CLIFF_PIANO' || prop === 'CYANIDE_STAGE') {
+    return [
+      'CYANIDE_CLIFF_OPENING',
+      'CYANIDE_KNIFE_ARGUMENT',
+      'CYANIDE_PASS_KNIFE_PURPLE',
+      'CYANIDE_PIANO_REVEAL',
+      'CYANIDE_COUPLE_GLASSES',
+      'CYANIDE_WIDE_TOWER_ZOOM',
+    ];
+  }
   if (prop === 'MOSQUITO') {
     return [
       'WALK_CONFIDENT',
@@ -2405,12 +2431,12 @@ function defaultActionSequenceForProp(prop: StickmanPropType): StickmanActionTyp
     ];
   }
   return [
-    'WALK_CONFIDENT',
-    'PULL_HANDLE_HARD',
-    'BRACE_FOOT_AND_FALL',
-    'FLYING_KICK_BOUNCE',
-    'THINK_LIGHTBULB_IDEA',
-    'PUSH_OPEN_AND_EXIT',
+    'CYANIDE_CLIFF_OPENING',
+    'CYANIDE_KNIFE_ARGUMENT',
+    'CYANIDE_PASS_KNIFE_PURPLE',
+    'CYANIDE_PIANO_REVEAL',
+    'CYANIDE_COUPLE_GLASSES',
+    'CYANIDE_WIDE_TOWER_ZOOM',
   ];
 }
 
@@ -2419,8 +2445,8 @@ const DEFAULT_NVIDIA_NIM_KEY =
   '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';
 
 /**
- * Generates a 6-scene (60-second) consistent Stickman / Cartoon Storyboard using NVIDIA NIM LLM
- * (`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` or `z-ai/glm-5.3-flash`) with deterministic fallback.
+ * Generates a 6-scene consistent Stickman / Cyanide & Happiness Storyboard using
+ * Grok 4.20 (acid comedy dialogue writer) + Claude 5.5 (2D animation & camera director) + NVIDIA NIM fallback.
  */
 export async function generateStoryboardWithNvidiaNimAsync(params: {
   ideaPrompt: string;
@@ -2430,206 +2456,211 @@ export async function generateStoryboardWithNvidiaNimAsync(params: {
   nvidiaApiKey?: string;
 }): Promise<StorySceneSpec[]> {
   const sceneCount = Math.max(3, Math.min(8, Number(params.sceneCount) || 6));
-  const totalDur = Math.max(30, Math.min(90, Number(params.totalDurationSec) || 60));
+  const totalDur = Math.max(30, Math.min(120, Number(params.totalDurationSec) || 60));
   const perSceneDur = Number((totalDur / sceneCount).toFixed(1));
   const apiKey = (params.nvidiaApiKey || DEFAULT_NVIDIA_NIM_KEY).trim();
 
+  const useClassicDoor = params.stylePreset === 'MINT_DOOR_CLASSIC';
   const baseCharacterStyle =
     params.stylePreset === 'CARTOON_3D'
       ? '3D Pixar style expressive cartoon character, vibrant lighting, clean background'
       : params.stylePreset === 'ANIME_ACTION'
         ? '2D anime style character, dynamic cel shading, expressive face, clean background'
-        : '2D cartoon white stickman character with round white head, big expressive cartoon eyes, black stick arms and legs, thick black outlines, mint green room background with a brown wooden door';
+        : '2D Cyanide and Happiness Explosm style stickman characters with peach round heads, colored rectangular shirts, thick black outlines, expressive mouths and noodle stick limbs';
 
-  const propType = inferPropTypeFromIdea(params.ideaPrompt);
+  const propType = useClassicDoor ? 'DOOR' : inferPropTypeFromIdea(params.ideaPrompt);
   const actionSeq = defaultActionSequenceForProp(propType);
 
   try {
-    const sysPrompt = `Eres un director experto en YouTube Shorts virales de 60 segundos estilo Stickman Comedy 2D (animación esquelética física sin narrador).
+    const sysPrompt = `Eres un dúo de dirección de animación 2D estilo "Cyanide & Happiness" (ExplosmEntertainment) doblado al español (igual al sketch viral de la cuerda y el piano en el precipicio).
 Devuelve ÚNICAMENTE un JSON válido con un arreglo de exactamente ${sceneCount} escenas para la idea del usuario.
-Cada elemento del arreglo debe tener:
-- "sceneNumber": número del 1 al ${sceneCount}
-- "title": título corto de la acción física en español (ej. "Escena 1: Camina Confiado hacia la Puerta")
-- "actionType": una de las animaciones esqueléticas 24fps disponibles: ["WALK_CONFIDENT", "PULL_HANDLE_HARD", "BRACE_FOOT_AND_FALL", "CROWBAR_PRY_SPARKS", "FLYING_KICK_BOUNCE", "THINK_LIGHTBULB_IDEA", "PUSH_OPEN_AND_EXIT", "SWAT_MOSQUITO_CHAOS", "SPIDER_PANIC_BROOM", "GYM_HEAVY_BARBELL"]
-- "visualPrompt": descripción visual en inglés que empiece con "${baseCharacterStyle},"
-- "narrationText": descripción breve de la acción física en español (10 a 16 palabras)
-- "cameraMotion": uno de ["ZOOM_IN", "ZOOM_OUT", "PAN_RIGHT", "PAN_LEFT", "PUNCH_SHAKE"]
-- "sfxType": uno de ["EFFORT", 'KNOCK', 'CLANG', 'EXPLOSION', 'DOOR_CREAK', 'LAUGH']`;
+Cada escena debe tener diálogos rápidos, ácidos, sarcásticos y absurdos entre múltiples personajes:
+- speakerIndex 0: Personaje Amarillo con gafas de esquí y cuchillo (en pánico)
+- speakerIndex 1: Personaje Rojo (escéptico / indignado)
+- speakerIndex 2: Personaje Morado (sarcástico: "¿no podríamos cortar el piano?")
+- speakerIndex 3: Pianista colgado boca abajo con un piano de cola gigante ("¡El piano se queda! ¡Tu madre es demasiado pesada!")
+- speakerIndex 4: Hombre con gafas y camisa a cuadros
+- speakerIndex 5: Señora con gafas y pelo rizado ("¡Pero bueno! ¡Retíralo ahora mismo!")
 
-    // 1. Try Claude 5.5 (Anthropic) FIRST for elite comedy storytelling & plot twist pacing
-    const claudeRaw = await callClaudeAnthropicAsync({
+Cada elemento del arreglo JSON debe tener:
+- "sceneNumber": número del 1 al ${sceneCount}
+- "title": título corto de la escena en español
+- "actionType": una de ["CYANIDE_CLIFF_OPENING", "CYANIDE_KNIFE_ARGUMENT", "CYANIDE_PASS_KNIFE_PURPLE", "CYANIDE_PIANO_REVEAL", "CYANIDE_COUPLE_GLASSES", "CYANIDE_WIDE_TOWER_ZOOM"]
+- "dialogueLines": arreglo de 2 o 3 líneas de diálogo: [{"speakerIndex": 0, "text": "...", "emotion": "PANIC" | "ANGRY" | "SARCASTIC" | "SHOCKED" | "SMUG"}]
+- "narrationText": resumen del diálogo separado por " — " (ej. "¡Hay demasiado peso! — ¡Espera, déjame hacerlo!")
+- "visualPrompt": descripción visual en inglés que empiece con "${baseCharacterStyle},"
+- "cameraMotion": uno de ["ZOOM_IN", "ZOOM_OUT", "PAN_RIGHT", "PAN_LEFT", "PUNCH_SHAKE"]
+- "sfxType": uno de ["EFFORT", "KNOCK", "CLANG", "EXPLOSION", "DOOR_CREAK", "LAUGH"]`;
+
+    // 1. Step A: Use Grok 4.20 FIRST to write authentic acid/dark-humor Cyanide & Happiness dialogue,
+    // or Claude 5.5 to structure the animation & lip-sync JSON!
+    let llmRaw = await callGrokXaiChatAsync({
       systemPrompt: sysPrompt,
-      userPrompt: `Crea las ${sceneCount} escenas animadas con inicio, escalada cómica y giro inesperado final para esta historia de ${totalDur} segundos: ${params.ideaPrompt}`,
-      maxTokens: 1200,
+      userPrompt: `Escribe el guion animado estilo Cyanide & Happiness de ${sceneCount} escenas (${totalDur}s) con diálogos doblados al español para: ${params.ideaPrompt}`,
+      maxTokens: 1600,
+      temperature: 0.78,
     });
-    if (claudeRaw) {
-      const claudeMatch = claudeRaw.match(/\[[\s\S]*\]/);
-      if (claudeMatch) {
-        const parsed = JSON.parse(claudeMatch[0]);
-        if (Array.isArray(parsed) && parsed.length >= 3) {
-          return parsed.slice(0, sceneCount).map((item: any, idx: number) => ({
-            sceneNumber: idx + 1,
-            title: String(item.title || `Escena ${idx + 1}`),
-            actionType: (VALID_STICKMAN_ACTIONS.includes(item.actionType)
-              ? item.actionType
-              : actionSeq[idx % actionSeq.length]) as StickmanActionType,
-            propType,
-            visualPrompt: String(item.visualPrompt || '').includes('stickman')
-              ? String(item.visualPrompt)
-              : `${baseCharacterStyle}, ${String(item.visualPrompt || params.ideaPrompt)}`,
-            narrationText: String(
-              item.narrationText || `En la escena ${idx + 1}, nuestro personaje intenta resolver el problema.`
-            ),
-            cameraMotion: (['ZOOM_IN', 'ZOOM_OUT', 'PAN_RIGHT', 'PAN_LEFT', 'PUNCH_SHAKE'].includes(item.cameraMotion)
-              ? item.cameraMotion
-              : 'ZOOM_IN') as StorySceneSpec['cameraMotion'],
-            sfxType: (['EFFORT', 'KNOCK', 'CLANG', 'EXPLOSION', 'DOOR_CREAK', 'LAUGH'].includes(item.sfxType)
-              ? item.sfxType
-              : 'EFFORT') as StorySceneSpec['sfxType'],
-            durationSec: perSceneDur,
-          }));
-        }
-      }
+
+    if (!llmRaw) {
+      llmRaw = await callClaudeAnthropicAsync({
+        systemPrompt: sysPrompt,
+        userPrompt: `Crea las ${sceneCount} escenas animadas estilo Cyanide & Happiness con diálogos multi-personaje y giro absurdo para esta historia de ${totalDur} segundos: ${params.ideaPrompt}`,
+        maxTokens: 1500,
+      });
     }
 
-    const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'nvidia/nemotron-3.5-bolt-e4b',
-        messages: [
-          { role: 'system', content: sysPrompt },
-          { role: 'user', content: `Crea las ${sceneCount} escenas animadas para esta historia de ${totalDur} segundos: ${params.ideaPrompt}` },
-        ],
-        max_tokens: 2200,
-        temperature: 0.65,
-      }),
-      signal: AbortSignal.timeout(25000),
-    });
-
-    if (res.ok) {
-      const data: any = await res.json();
-      const rawContent = String(data?.choices?.[0]?.message?.content || '');
-      const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
+    if (llmRaw) {
+      const jsonMatch = llmRaw.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         if (Array.isArray(parsed) && parsed.length >= 3) {
-          return parsed.slice(0, sceneCount).map((item: any, idx: number) => ({
-            sceneNumber: idx + 1,
-            title: String(item.title || `Escena ${idx + 1}`),
-            actionType: (VALID_STICKMAN_ACTIONS.includes(item.actionType)
-              ? item.actionType
-              : actionSeq[idx % actionSeq.length]) as StickmanActionType,
-            propType,
-            visualPrompt: String(item.visualPrompt || '').includes('stickman')
-              ? String(item.visualPrompt)
-              : `${baseCharacterStyle}, ${String(item.visualPrompt || params.ideaPrompt)}`,
-            narrationText: String(
-              item.narrationText || `En la escena ${idx + 1}, nuestro personaje intenta resolver el problema.`
-            ),
-            cameraMotion: (['ZOOM_IN', 'ZOOM_OUT', 'PAN_RIGHT', 'PAN_LEFT', 'PUNCH_SHAKE'].includes(item.cameraMotion)
-              ? item.cameraMotion
-              : 'ZOOM_IN') as StorySceneSpec['cameraMotion'],
-            sfxType: (['EFFORT', 'KNOCK', 'CLANG', 'EXPLOSION', 'DOOR_CREAK', 'LAUGH'].includes(item.sfxType)
-              ? item.sfxType
-              : 'EFFORT') as StorySceneSpec['sfxType'],
-            durationSec: perSceneDur,
-          }));
+          return parsed.slice(0, sceneCount).map((item: any, idx: number) => {
+            const dLines = Array.isArray(item.dialogueLines)
+              ? item.dialogueLines
+                  .filter((d: any) => d && String(d.text || '').trim().length > 0)
+                  .map((d: any) => ({
+                    speakerIndex: Math.abs(Number(d.speakerIndex) || 0) % 6,
+                    text: String(d.text).trim(),
+                    emotion: (['PANIC', 'ANGRY', 'SARCASTIC', 'SHOCKED', 'DEADPAN', 'SMUG'].includes(d.emotion)
+                      ? d.emotion
+                      : 'PANIC') as any,
+                  }))
+              : undefined;
+            const joinedDialogue =
+              dLines && dLines.length > 0
+                ? dLines.map((d: any) => d.text).join(' — ')
+                : String(item.narrationText || `¡Hay demasiado peso en la cuerda! — ¡Espera, no cortes!`);
+
+            return {
+              sceneNumber: idx + 1,
+              title: String(item.title || `Escena ${idx + 1}`),
+              actionType: (VALID_STICKMAN_ACTIONS.includes(item.actionType)
+                ? item.actionType
+                : actionSeq[idx % actionSeq.length]) as StickmanActionType,
+              propType,
+              visualStyle: useClassicDoor ? 'MINT_DOOR_CLASSIC' : 'CYANIDE_EXPLOSM',
+              dialogueLines: dLines,
+              visualPrompt: String(item.visualPrompt || '').includes('stickman')
+                ? String(item.visualPrompt)
+                : `${baseCharacterStyle}, ${String(item.visualPrompt || params.ideaPrompt)}`,
+              narrationText: joinedDialogue,
+              cameraMotion: (['ZOOM_IN', 'ZOOM_OUT', 'PAN_RIGHT', 'PAN_LEFT', 'PUNCH_SHAKE'].includes(item.cameraMotion)
+                ? item.cameraMotion
+                : 'ZOOM_IN') as StorySceneSpec['cameraMotion'],
+              sfxType: (['EFFORT', 'KNOCK', 'CLANG', 'EXPLOSION', 'DOOR_CREAK', 'LAUGH'].includes(item.sfxType)
+                ? item.sfxType
+                : 'EFFORT') as StorySceneSpec['sfxType'],
+              durationSec: perSceneDur,
+            };
+          });
         }
       }
     }
   } catch {}
 
-  // Deterministic high-quality 6-scene Stickman Comedy Storyboard fallback
-  const ideaClean = params.ideaPrompt.trim() || 'Intentó abrir la puerta de todas las formas menos empujando';
-
-  // Dynamic fallback for ANY custom story (not about a door)
-  if (!/puerta|door/i.test(ideaClean)) {
-    const topic = ideaClean.replace(/\s+/g, ' ').slice(0, 160);
-    const dynamicScenes: StorySceneSpec[] = [
-      { sceneNumber: 1, title: 'Escena 1: Llega Muy Confiado', actionType: actionSeq[0], propType, visualPrompt: `${baseCharacterStyle}, confident smug pose introducing the situation: ${topic}, 2D flat vector comedy frame`, narrationText: `Todo empezó así: ${topic}.`, cameraMotion: 'ZOOM_IN', sfxType: 'KNOCK', durationSec: perSceneDur },
-      { sceneNumber: 2, title: 'Escena 2: Primer Intento Físico', actionType: actionSeq[1], propType, visualPrompt: `${baseCharacterStyle}, trying very hard with extreme effort and sweat in a funny exaggerated way, related to: ${topic}, 2D cartoon comedy`, narrationText: 'Su primer intento fue tan exagerado que nada salió como esperaba.', cameraMotion: 'PUNCH_SHAKE', sfxType: 'EFFORT', durationSec: perSceneDur },
-      { sceneNumber: 3, title: 'Escena 3: Plan Extremo', actionType: actionSeq[2], propType, visualPrompt: `${baseCharacterStyle}, determined angry face using a ridiculous oversized tool or gadget, related to: ${topic}, sparks and motion lines, 2D cartoon`, narrationText: 'Entonces sacó un plan extremo, convencido de que esta vez sí funcionaría.', cameraMotion: 'ZOOM_IN', sfxType: 'CLANG', durationSec: perSceneDur },
-      { sceneNumber: 4, title: 'Escena 4: Ataque Volador y Caída', actionType: actionSeq[3], propType, visualPrompt: `${baseCharacterStyle}, chaotic comic explosion of action, flying objects, impact lines, related to: ${topic}, 2D stickman comedy`, narrationText: 'Se lanzó con todo por el aire y terminó rebotando contra el suelo.', cameraMotion: 'PUNCH_SHAKE', sfxType: 'EXPLOSION', durationSec: perSceneDur },
-      { sceneNumber: 5, title: 'Escena 5: ¡Se Enciende el Bombillo! 💡', actionType: actionSeq[4], propType, visualPrompt: `${baseCharacterStyle}, sitting on floor thinking until a glowing yellow lightbulb appears over head, related to: ${topic}, 2D stickman cartoon`, narrationText: 'Después de caer al piso, se puso a pensar hasta que tuvo una idea brillante.', cameraMotion: 'ZOOM_OUT', sfxType: 'EFFORT', durationSec: perSceneDur },
-      { sceneNumber: 6, title: 'Escena 6: Solución Sin Esfuerzo', actionType: actionSeq[5], propType, visualPrompt: `${baseCharacterStyle}, smug smile as the simplest obvious solution works effortlessly and walks out, related to: ${topic}, 2D stickman comedy finale`, narrationText: 'Al final, hizo lo más simple del mundo y salió caminando como un campeón.', cameraMotion: 'PAN_RIGHT', sfxType: 'LAUGH', durationSec: perSceneDur },
-    ];
-    return dynamicScenes.slice(0, sceneCount);
-  }
-
-  const defaultScenes: StorySceneSpec[] = [
+  // Default 6-scene Cyanide & Happiness ("Cliffhanger: La Cuerda y el Piano") Storyboard matching `ejemplo stickman.mp4` 1:1
+  const cyanideCliffScenes: StorySceneSpec[] = [
     {
       sceneNumber: 1,
-      title: 'Escena 1: Camina Confiado hacia la Puerta',
-      actionType: 'WALK_CONFIDENT',
-      propType: 'DOOR',
-      visualPrompt: `${baseCharacterStyle}, walking confidently with hands on hips smiling smugly toward a closed brown wooden door, 2D flat vector animation`,
-      narrationText: 'Camina muy confiado hacia la puerta marrón, se pone las manos en la cintura y agarra el pomo.',
+      title: 'Escena 1: ¡Demasiado Peso en el Precipicio!',
+      actionType: 'CYANIDE_CLIFF_OPENING',
+      propType: 'CLIFF_PIANO',
+      visualStyle: 'CYANIDE_EXPLOSM',
+      dialogueLines: [
+        { speakerIndex: 0, text: '¡Ah! ¡Hay demasiado peso! ¡Tengo que cortar la cuerda! Lo siento...', emotion: 'PANIC' },
+        { speakerIndex: 1, text: '¡Espera! ¡Déjame hacerlo a mí!', emotion: 'SHOCKED' },
+      ],
+      visualPrompt: `${baseCharacterStyle}, hanging from a cliff rope with ski goggles and a knife`,
+      narrationText: '¡Hay demasiado peso! ¡Tengo que cortar la cuerda! Lo siento... — ¡Espera! ¡Déjame hacerlo a mí!',
       cameraMotion: 'ZOOM_IN',
-      sfxType: 'KNOCK',
-      durationSec: perSceneDur,
-    },
-    {
-      sceneNumber: 2,
-      title: 'Escena 2: Jala la Manija con Ambas Manos',
-      actionType: 'PULL_HANDLE_HARD',
-      propType: 'DOOR',
-      visualPrompt: `${baseCharacterStyle}, pulling the door handle with both hands leaning backward with effort, sweating, 2D cartoon comedy`,
-      narrationText: 'Agarra el pomo con las dos manos y tira hacia atrás con todas sus fuerzas sudando la gota gorda.',
-      cameraMotion: 'PUNCH_SHAKE',
       sfxType: 'EFFORT',
       durationSec: perSceneDur,
     },
     {
-      sceneNumber: 3,
-      title: 'Escena 3: Apoya el Pie en la Puerta y Cae de Espaldas',
-      actionType: 'BRACE_FOOT_AND_FALL',
-      propType: 'DOOR',
-      visualPrompt: `${baseCharacterStyle}, bracing one foot against the brown door pulling with squinting >< eyes then slipping and falling on the floor`,
-      narrationText: 'Apoya el pie contra la puerta para jalar más fuerte, se resbala de golpe y cae sentado al suelo.',
+      sceneNumber: 2,
+      title: 'Escena 2: ¡Pero si Abajo Hay Otro Más!',
+      actionType: 'CYANIDE_KNIFE_ARGUMENT',
+      propType: 'CLIFF_PIANO',
+      visualStyle: 'CYANIDE_EXPLOSM',
+      dialogueLines: [
+        { speakerIndex: 0, text: '¡No puedo aguantar más, la cuerda se está rompiendo!', emotion: 'PANIC' },
+        { speakerIndex: 1, text: '¡Pásame el cuchillo, abajo hay gente que pesa mucho más que yo!', emotion: 'ANGRY' },
+      ],
+      visualPrompt: `${baseCharacterStyle}, two characters arguing while tied to a vertical climbing rope`,
+      narrationText: '¡No puedo aguantar más, la cuerda se está rompiendo! — ¡Pásame el cuchillo, abajo hay gente que pesa mucho más!',
       cameraMotion: 'PUNCH_SHAKE',
       sfxType: 'CLANG',
       durationSec: perSceneDur,
     },
     {
+      sceneNumber: 3,
+      title: 'Escena 3: ¿No Podríamos Cortar el Piano?',
+      actionType: 'CYANIDE_PASS_KNIFE_PURPLE',
+      propType: 'CLIFF_PIANO',
+      visualStyle: 'CYANIDE_EXPLOSM',
+      dialogueLines: [
+        { speakerIndex: 1, text: '¡Tenemos que hacerlo, lo siento mucho amigo!', emotion: 'PANIC' },
+        { speakerIndex: 2, text: '¿Qué te hace pensar que la cuerda te aguanta a ti? En todo caso, ¿no podríamos cortar el piano?', emotion: 'SARCASTIC' },
+        { speakerIndex: 1, text: 'Bueno, sí, en realidad ese es un buen punto de partida.', emotion: 'DEADPAN' },
+      ],
+      visualPrompt: `${baseCharacterStyle}, red shirt passing knife to purple shirt character on rope`,
+      narrationText: '¿Qué te hace pensar que la cuerda te aguanta a ti? — En todo caso, ¿no podríamos cortar el piano?',
+      cameraMotion: 'PAN_LEFT',
+      sfxType: 'KNOCK',
+      durationSec: perSceneDur,
+    },
+    {
       sceneNumber: 4,
-      title: 'Escena 4: Patada Voladora y Rebote',
-      actionType: 'FLYING_KICK_BOUNCE',
-      propType: 'DOOR',
-      visualPrompt: `${baseCharacterStyle}, jumping in mid-air delivering a dramatic flying karate kick against the closed brown door and bouncing off`,
-      narrationText: 'Toma impulso furioso, lanza una patada voladora en el aire contra la puerta y rebota al piso.',
+      title: 'Escena 4: ¡El Pianista Colgado Boca Abajo! 🎹',
+      actionType: 'CYANIDE_PIANO_REVEAL',
+      propType: 'CLIFF_PIANO',
+      visualStyle: 'CYANIDE_EXPLOSM',
+      dialogueLines: [
+        { speakerIndex: 3, text: '¡Oye, espera más despacio! ¡No he cargado todo el camino con este piano para tocar en la cima de la montaña y que ahora me dejéis morir!', emotion: 'ANGRY' },
+        { speakerIndex: 2, text: '¡Es que no hay otra manera, lo siento mucho, el piano es demasiado pesado!', emotion: 'PANIC' },
+      ],
+      visualPrompt: `${baseCharacterStyle}, upside down grand piano tied to cliff rope with pianist hanging from bench`,
+      narrationText: '¡No he cargado todo el camino con este piano para que ahora me dejéis morir! — ¡El piano es demasiado pesado!',
       cameraMotion: 'PUNCH_SHAKE',
       sfxType: 'EXPLOSION',
       durationSec: perSceneDur,
     },
     {
       sceneNumber: 5,
-      title: 'Escena 5: Piensa en el Piso y Sale el Bombillo 💡',
-      actionType: 'THINK_LIGHTBULB_IDEA',
-      propType: 'DOOR',
-      visualPrompt: `${baseCharacterStyle}, sitting on floor scratching head then standing up as a bright yellow lightbulb pops above his head`,
-      narrationText: 'Sentado en el suelo se rasca la cabeza pensando, hasta que se le prende el bombillo con la idea obvia.',
-      cameraMotion: 'ZOOM_OUT',
-      sfxType: 'EFFORT',
+      title: 'Escena 5: "¡Tu Madre Es Demasiado Pesada!"',
+      actionType: 'CYANIDE_COUPLE_GLASSES',
+      propType: 'CLIFF_PIANO',
+      visualStyle: 'CYANIDE_EXPLOSM',
+      dialogueLines: [
+        { speakerIndex: 3, text: '¡Tu madre es demasiado pesada!', emotion: 'SMUG' },
+        { speakerIndex: 5, text: '¡Pero bueno! ¡Retíralo ahora mismo!', emotion: 'ANGRY' },
+        { speakerIndex: 4, text: '¡Oblígame! ¡Aquí abajo todos estamos colgados del mismo hilo!', emotion: 'PANIC' },
+      ],
+      visualPrompt: `${baseCharacterStyle}, woman with curly hair and glasses and man with plaid shirt and glasses hanging on rope`,
+      narrationText: '¡Tu madre es demasiado pesada! — ¡Pero bueno! ¡Retíralo ahora mismo! — ¡Oblígame!',
+      cameraMotion: 'ZOOM_IN',
+      sfxType: 'LAUGH',
       durationSec: perSceneDur,
     },
     {
       sceneNumber: 6,
-      title: 'Escena 6: Empuja la Puerta Suavemente y Sale',
-      actionType: 'PUSH_OPEN_AND_EXIT',
-      propType: 'DOOR',
-      visualPrompt: `${baseCharacterStyle}, pushing the brown wooden door gently inward as it swings open easily and walking out smugly`,
-      narrationText: 'Se acerca tranquilo, empuja la puerta hacia adentro con una sola mano y sale caminando con sonrisa de victoria.',
-      cameraMotion: 'PAN_RIGHT',
+      title: 'Escena 6: Zoom Final a Toda la Cuerda y el Piano',
+      actionType: 'CYANIDE_WIDE_TOWER_ZOOM',
+      propType: 'CLIFF_PIANO',
+      visualStyle: 'CYANIDE_EXPLOSM',
+      dialogueLines: [
+        { speakerIndex: 0, text: '¡Un momento! ¿Cómo demonios ataron un piano de cola y a cinco personas a mi cuerda?', emotion: 'SHOCKED' },
+        { speakerIndex: 3, text: '¡Silencio todos, que ahí va mi solo de piano antes de caer al vacío!', emotion: 'SMUG' },
+      ],
+      visualPrompt: `${baseCharacterStyle}, wide shot of rocky cliff wall with all characters and grand piano hanging on rope`,
+      narrationText: '¿Cómo demonios ataron un piano de cola a mi cuerda? — ¡Silencio todos, que ahí va mi solo de piano!',
+      cameraMotion: 'ZOOM_OUT',
       sfxType: 'LAUGH',
       durationSec: perSceneDur,
     },
   ];
 
-  return defaultScenes.slice(0, sceneCount);
+  return cyanideCliffScenes.slice(0, sceneCount);
 }
 
 /**
@@ -2719,9 +2750,9 @@ export async function render60sStoryVideoFromScenesAsync(params: {
   let cumulativeSec = 0;
 
   const totalScenes = params.scenes.length;
-  const voice = params.voiceName || 'NONE';
+  const voice = params.voiceName || 'MULTI_VOICE_CYANIDE';
   const useVoice = voice !== 'NONE' && voice !== 'MUTE';
-  const defaultActions = defaultActionSequenceForProp('DOOR');
+  const defaultActions = defaultActionSequenceForProp('CLIFF_PIANO');
 
   for (let i = 0; i < totalScenes; i++) {
     const sc = params.scenes[i];
@@ -2736,17 +2767,16 @@ export async function render60sStoryVideoFromScenesAsync(params: {
 
     params.onProgress?.(
       basePct,
-      `Animando Escena ${i + 1}/${totalScenes} a 24 FPS (${resolvedAction}: "${sc.title}")...`
+      `Animando Escena ${i + 1}/${totalScenes} a 30 FPS Cyanide & Happiness (${resolvedAction}: "${sc.title}")...`
     );
 
-    // Optional TTS voiceover audio if user selected a voice (by default NONE = physical comedy + SFX only)
     const ttsPath = path.join(params.outputDir, `scene_${i + 1}_tts.mp3`);
     let hasTts = false;
-    if (useVoice && sc.narrationText && sc.narrationText.trim().length > 0) {
+    if (useVoice && sc.visualStyle === 'MINT_DOOR_CLASSIC' && sc.narrationText && sc.narrationText.trim().length > 0) {
       try {
         const ttsProc = await runCommandAsync(
           'python3',
-          ['-m', 'edge_tts', '--voice', voice, '--text', sc.narrationText.trim(), '--write-media', ttsPath],
+          ['-m', 'edge_tts', '--voice', voice === 'MULTI_VOICE_CYANIDE' ? 'es-ES-AlvaroNeural' : voice, '--text', sc.narrationText.trim(), '--write-media', ttsPath],
           20000
         );
         if (ttsProc.status === 0 && fs.existsSync(ttsPath) && fs.statSync(ttsPath).size > 500) {
@@ -2781,10 +2811,13 @@ export async function render60sStoryVideoFromScenesAsync(params: {
         propType: resolvedProp,
         durationSec: sceneDur,
         narrationText: sc.narrationText,
+        visualStyle: sc.visualStyle || 'CYANIDE_EXPLOSM',
+        aspectRatio: sc.aspectRatio || '16:9',
+        dialogueLines: sc.dialogueLines,
       },
       outputMp4Path: sceneMp4,
       voiceMp3Path: hasTts ? ttsPath : undefined,
-      fps: 24,
+      fps: 30,
     });
 
     sceneClipPaths.push(sceneMp4);

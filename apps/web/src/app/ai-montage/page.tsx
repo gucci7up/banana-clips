@@ -40,57 +40,64 @@ interface StorySceneSpec {
 }
 
 const DEFAULT_IDEA =
-  'Intentó abrir la puerta de todas las formas posibles (tirando, con una palanca, con una patada voladora) excepto empujando hacia adentro';
+  'Varios personajes estilo Cyanide & Happiness están colgados de una cuerda en un precipicio con demasiado peso, intentan cortar la cuerda con un cuchillo pero más abajo hay un pianista colgado boca abajo con un piano de cola gigante que se niega a soltarlo';
 
 const VIRAL_STORY_PRESETS = [
+  {
+    id: 'cyanide_cliff_piano',
+    badge: '🧗‍♂️🎹 Precipicio y el Piano (Cyanide & Happiness)',
+    title: '¡Hay Demasiado Peso en la Cuerda! 🎹🧗‍♂️ Stickman Español',
+    idea: DEFAULT_IDEA,
+    style: 'CYANIDE_EXPLOSM',
+  },
   {
     id: 'door_push',
     badge: '🚪 La Puerta (Stickman)',
     title: 'He Tried EVERYTHING… Except Pushing 😂🚪 #Shorts',
     idea: 'Intentó abrir la puerta de todas las formas posibles (tirando, con una palanca, con una patada voladora) excepto empujando hacia adentro',
-    style: 'STICKMAN_COMEDY',
+    style: 'CYANIDE_EXPLOSM',
   },
   {
     id: 'gym_weight',
     badge: '🏋️‍♂️ El Gimnasio (Stickman)',
     title: 'Never Show Off at the Gym 😂🏋️‍♂️ Stickman #Shorts',
     idea: 'Un stickman flaco intenta levantar una pesa gigante de 500 kilos en el gimnasio para impresionar a todos, hace un esfuerzo extremo y luego una niña pasa y la levanta con una sola mano como si fuera de espuma',
-    style: 'STICKMAN_COMEDY',
+    style: 'CYANIDE_EXPLOSM',
   },
   {
     id: 'spider_panic',
     badge: '🕷️ La Araña Pequeña',
     title: 'One Tiny Spider vs Stickman 😂🕷️ #Shorts',
     idea: 'Un stickman ve una araña diminuta en la pared de su habitación, entra en pánico total, usa una escoba, un lanzallamas cómico, destruye media habitación y al final la araña solo quería saludarlo con un sombrerito',
-    style: 'STICKMAN_COMEDY',
+    style: 'CYANIDE_EXPLOSM',
   },
   {
     id: 'mosquito_night',
     badge: '🦟 El Mosquito a las 3 AM',
     title: '3 AM Mosquito Battle 😂🦟 Stickman #Shorts',
     idea: 'Un stickman intenta dormir a las 3 de la mañana pero un mosquito le zumba en la oreja, intenta atraparlo con almohadas, raquetas eléctricas y trampas locas sin poder dormir hasta que amanece',
-    style: 'STICKMAN_COMEDY',
+    style: 'CYANIDE_EXPLOSM',
   },
   {
     id: 'custom_blank',
     badge: '✨ Escribir Mi Propia Historia...',
-    title: 'Mi Nueva Historia Viral #Shorts (60s)',
+    title: 'Mi Nueva Historia Viral Stickman (60s)',
     idea: '',
-    style: 'STICKMAN_COMEDY',
+    style: 'CYANIDE_EXPLOSM',
   },
 ];
 
 export default function AiMontagePage() {
   const [activeTab, setActiveTab] = useState<'STORY_60S' | 'CLASSIC_MONTAGE'>('STORY_60S');
 
-  // NVIDIA NIM 60s Story Studio State
-  const [storyTitle, setStoryTitle] = useState('He Tried EVERYTHING… Except Pushing 😂🚪 #Shorts');
+  // Grok 4.20 + Claude 5.5 + NVIDIA NIM 60s Story Studio State
+  const [storyTitle, setStoryTitle] = useState('¡Hay Demasiado Peso en la Cuerda! 🎹🧗‍♂️ Stickman Español');
   const [ideaPrompt, setIdeaPrompt] = useState(DEFAULT_IDEA);
-  const [stylePreset, setStylePreset] = useState('STICKMAN_COMEDY');
+  const [stylePreset, setStylePreset] = useState('CYANIDE_EXPLOSM');
   const [sceneCount, setSceneCount] = useState<number>(6);
   const [totalDurationSec, setTotalDurationSec] = useState<number>(60);
   const [seed, setSeed] = useState<number>(42);
-  const [voiceName, setVoiceName] = useState('NONE');
+  const [voiceName, setVoiceName] = useState('MULTI_VOICE_CYANIDE');
   const [burnSubtitles, setBurnSubtitles] = useState(false);
   const [nvidiaApiKey, setNvidiaApiKey] = useState(
     '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'
@@ -120,7 +127,7 @@ export default function AiMontagePage() {
 
   useEffect(() => {
     loadAll();
-    handleGenerateStoryboard(DEFAULT_IDEA, 'STICKMAN_COMEDY', 6, 60);
+    handleGenerateStoryboard(DEFAULT_IDEA, 'CYANIDE_EXPLOSM', 6, 60);
   }, []);
 
   const handleGenerateStoryboard = async (
@@ -348,14 +355,15 @@ export default function AiMontagePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-[11px] font-semibold text-zinc-400">
-                    Estilo Visual (NVIDIA FLUX.1-dev)
+                    Estilo de Animación 2D (Grok 4.20 + Claude 5.5)
                   </label>
                   <select
                     value={stylePreset}
                     onChange={(e) => setStylePreset(e.target.value)}
                     className="w-full rounded-xl border border-zinc-700 bg-[#0E1015] px-3 py-2 text-xs font-semibold text-white"
                   >
-                    <option value="STICKMAN_COMEDY">Stickman Comedy 2D (Fondo Menta)</option>
+                    <option value="CYANIDE_EXPLOSM">🔥 Cyanide & Happiness 2D (Multi-Personaje + Lip-Sync)</option>
+                    <option value="MINT_DOOR_CLASSIC">Stickman Clásico (Fondo Menta + Puerta)</option>
                     <option value="CARTOON_3D">Cartoon 3D Estilo Pixar</option>
                     <option value="ANIME_ACTION">Anime 2D Expresivo</option>
                   </select>
@@ -385,21 +393,21 @@ export default function AiMontagePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-zinc-400">
-                    <Volume2 className="h-3.5 w-3.5 text-[#FFD43B]" /> Voz Narrador IA (TTS)
+                    <Volume2 className="h-3.5 w-3.5 text-[#FFD43B]" /> Voces y Doblaje IA (Lip-Sync)
                   </label>
                   <select
                     value={voiceName}
                     onChange={(e) => {
                       setVoiceName(e.target.value);
-                      setBurnSubtitles(e.target.value !== 'NONE');
+                      setBurnSubtitles(e.target.value !== 'NONE' && e.target.value !== 'MULTI_VOICE_CYANIDE');
                     }}
                     className="w-full rounded-xl border border-zinc-700 bg-[#0E1015] px-3 py-2 text-xs font-semibold text-white"
                   >
-                    <option value="NONE">🔇 Sin Voz (Comedia Física + SFX 24fps)</option>
-                    <option value="es-MX-JorgeNeural">🎙️ Español (Jorge + Subtítulos)</option>
-                    <option value="es-ES-AlvaroNeural">🎙️ Español (Álvaro + Subtítulos)</option>
+                    <option value="MULTI_VOICE_CYANIDE">🎭 Elenco Multi-Voz Español (6 Voces Actuadas + Lip-Sync)</option>
+                    <option value="es-ES-AlvaroNeural">🎙️ Español España (Álvaro + Subtítulos)</option>
+                    <option value="es-MX-JorgeNeural">🎙️ Español Latam (Jorge + Subtítulos)</option>
                     <option value="es-MX-DaliaNeural">🎙️ Español (Dalia + Subtítulos)</option>
-                    <option value="en-US-ChristopherNeural">🎙️ Inglés (Christopher + Subtítulos)</option>
+                    <option value="NONE">🔇 Sin Voz (Solo Efectos de Sonido)</option>
                   </select>
                 </div>
 

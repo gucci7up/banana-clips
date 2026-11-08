@@ -1,5 +1,5 @@
 import { createCanvas, SKRSContext2D } from '@napi-rs/canvas';
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -13,9 +13,32 @@ export type StickmanActionType =
   | 'PUSH_OPEN_AND_EXIT'
   | 'SWAT_MOSQUITO_CHAOS'
   | 'SPIDER_PANIC_BROOM'
-  | 'GYM_HEAVY_BARBELL';
+  | 'GYM_HEAVY_BARBELL'
+  | 'CYANIDE_CLIFF_OPENING'
+  | 'CYANIDE_KNIFE_ARGUMENT'
+  | 'CYANIDE_PASS_KNIFE_PURPLE'
+  | 'CYANIDE_PIANO_REVEAL'
+  | 'CYANIDE_COUPLE_GLASSES'
+  | 'CYANIDE_WIDE_TOWER_ZOOM'
+  | 'CYANIDE_DIALOGUE_BANTER';
 
-export type StickmanPropType = 'DOOR' | 'MOSQUITO' | 'SPIDER' | 'GYM_BARBELL';
+export type StickmanPropType =
+  | 'DOOR'
+  | 'MOSQUITO'
+  | 'SPIDER'
+  | 'GYM_BARBELL'
+  | 'CLIFF_PIANO'
+  | 'CYANIDE_STAGE';
+
+export interface CyanideDialogueLine {
+  speakerIndex: number; // 0=Yellow/Lead, 1=Red/Buddy, 2=Purple/Sarcastic, 3=Pianist/Twist, 4=GlassesGuy, 5=GlassesLady
+  speakerName?: string;
+  text: string;
+  emotion?: 'PANIC' | 'ANGRY' | 'SARCASTIC' | 'SHOCKED' | 'DEADPAN' | 'SMUG';
+  voice?: string;
+  pitch?: string;
+  rate?: string;
+}
 
 export interface StickmanChoreographyScene {
   sceneNumber: number;
@@ -24,36 +47,39 @@ export interface StickmanChoreographyScene {
   propType: StickmanPropType;
   durationSec: number;
   narrationText?: string;
-}
-
-interface Point {
-  x: number;
-  y: number;
+  visualStyle?: 'CYANIDE_EXPLOSM' | 'MINT_DOOR_CLASSIC';
+  aspectRatio?: '16:9' | '9:16';
+  cameraShot?: 'WIDE_CLIFF' | 'TWO_SHOT_TOP' | 'TWO_SHOT_MID' | 'PIANO_CLOSEUP' | 'COUPLE_CLOSEUP' | 'FULL_ROPE_ZOOM' | 'AUTO_CUT';
+  dialogueLines?: CyanideDialogueLine[];
 }
 
 interface StickmanPose {
-  // Root position (hip center) in 720x1280 canvas
   hipX: number;
   hipY: number;
-  // Torso angle in radians (0 = upright, negative = leaning left/back, positive = leaning right/forward)
   torsoAngle: number;
-  // Head offset / nod angle
   headTilt: number;
-  lookDirX: number; // -1 to 1
-  lookDirY: number; // -1 to 1
-  expression: 'SMUG' | 'CONFIDENT' | 'WORRIED' | 'STRAIN' | 'EXTREME_STRAIN' | 'PAIN_FALL' | 'THINKING' | 'IDEA' | 'SHOCKED';
-  // Hand & Foot targets in world coordinates (IK solver computes elbow & knee)
+  lookDirX: number;
+  lookDirY: number;
+  expression:
+    | 'SMUG'
+    | 'CONFIDENT'
+    | 'WORRIED'
+    | 'STRAIN'
+    | 'EXTREME_STRAIN'
+    | 'PAIN_FALL'
+    | 'THINKING'
+    | 'IDEA'
+    | 'SHOCKED';
   leftHand: { x: number; y: number };
   rightHand: { x: number; y: number };
   leftFoot: { x: number; y: number };
   rightFoot: { x: number; y: number };
-  // Scene prop state
-  doorOpenAngle: number; // 0 = closed, 1 = fully open inward
+  doorOpenAngle: number;
   doorShakeX: number;
-  showLightbulb: number; // 0 to 1
+  showLightbulb: number;
   showCrowbar: boolean;
   showImpactBurst: { x: number; y: number; scale: number } | null;
-  sweatDrops: number; // 0 to 1
+  sweatDrops: number;
   cameraZoom: number;
   cameraPanX: number;
   cameraPanY: number;
@@ -111,19 +137,972 @@ function solveTwoBoneIK(
   return { midX, midY, endX, endY };
 }
 
+// ============================================================================
+// CYANIDE & HAPPINESS ("EXPLOSM") 2D VECTOR CHARACTER & SCENE ENGINE
+// Matches "ejemplo stickman.mp4" 1:1 (peach round heads, rectangular shirts,
+// thick black outlines, braided cliff rope, ski goggles, knife, upside-down
+// grand piano + pianist, glasses couple, camera whip-pans & real lip-sync)
+// ============================================================================
+
+export interface CyanideCharacterSpec {
+  id: number;
+  shirtColor: string;
+  shirtPattern?: 'SOLID' | 'PLAID_CYAN';
+  headSkinColor?: string;
+  tiltRad: number; // angle on rope or stage
+  anchorX: number;
+  anchorY: number;
+  scale?: number;
+  accessory?: 'ORANGE_GOGGLES' | 'ROUND_GLASSES' | 'CURLY_HAIR_GLASSES' | 'PIANIST_HAIR' | 'NONE';
+  prop?: 'KNIFE' | 'NONE';
+  tiedToRope?: boolean;
+  upsideDown?: boolean;
+  emotion: 'PANIC' | 'ANGRY' | 'SARCASTIC' | 'SHOCKED' | 'DEADPAN' | 'SMUG';
+  mouthOpenAmt: number; // 0.0 (closed) to 1.0 (wide shouting) driven by audio lip-sync!
+  lookX: number;
+  lookY: number;
+  armWavePhase: number;
+}
+
 /**
- * Draws the exact mint-green 3D perspective room and brown wooden door from the reference video.
+ * Draws the braided vertical climbing rope from `ejemplo stickman.mp4`.
+ */
+function drawBraidedRope(ctx: SKRSContext2D, topX: number, topY: number, botX: number, botY: number, width = 10) {
+  ctx.save();
+  // Outer thick black rope edges
+  ctx.strokeStyle = '#111111';
+  ctx.lineWidth = width + 4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(topX, topY);
+  ctx.lineTo(botX, botY);
+  ctx.stroke();
+
+  // Inner dark gray rope core
+  ctx.strokeStyle = '#52525B';
+  ctx.lineWidth = width - 2;
+  ctx.beginPath();
+  ctx.moveTo(topX, topY);
+  ctx.lineTo(botX, botY);
+  ctx.stroke();
+
+  // Diagonal braided rope texture lines every 16px
+  const dist = Math.hypot(botX - topX, botY - topY);
+  const steps = Math.floor(dist / 16);
+  ctx.strokeStyle = '#111111';
+  ctx.lineWidth = 2.5;
+  for (let i = 0; i < steps; i++) {
+    const t = i / Math.max(1, steps);
+    const cx = lerp(topX, botX, t);
+    const cy = lerp(topY, botY, t);
+    ctx.beginPath();
+    ctx.moveTo(cx - width * 0.45, cy - 4);
+    ctx.lineTo(cx + width * 0.45, cy + 4);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/**
+ * Draws the rocky brown cliff overhang & wall on the top-right (`frame_01.jpg`, `frame_09.jpg`).
+ */
+function drawCyanideCliffBackground(
+  ctx: SKRSContext2D,
+  W: number,
+  H: number,
+  camX: number,
+  camY: number,
+  camZoom: number,
+  timeSec: number,
+  showFullCliffWall: boolean
+) {
+  // 1. Pale ice-blue sky (#E3F6F8 - exact match to ejemplo stickman.mp4)
+  ctx.fillStyle = '#E3F6F8';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(camZoom, camZoom);
+  ctx.translate(-W / 2 - camX, -H / 2 - camY);
+
+  // 2. Sweeping white wind cloud streaks in sky (exact match to frame_01 & frame_02)
+  const windDrift = Math.sin(timeSec * 0.8) * 18;
+  ctx.fillStyle = '#FFFFFF';
+  for (const cloudY of [280, 980, 1680, 2350]) {
+    ctx.beginPath();
+    ctx.moveTo(-250 + windDrift, cloudY);
+    ctx.quadraticCurveTo(180 + windDrift, cloudY - 12, 460 + windDrift, cloudY + 42);
+    ctx.quadraticCurveTo(475 + windDrift, cloudY + 58, 430 + windDrift, cloudY + 62);
+    ctx.quadraticCurveTo(150 + windDrift, cloudY + 25, -250 + windDrift, cloudY + 38);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // 3. Top rocky overhang ledge where the rope is anchored (around y = 0..170)
+  ctx.fillStyle = '#5C5343';
+  ctx.strokeStyle = '#26221B';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(580, -80);
+  ctx.lineTo(570, 28);
+  ctx.lineTo(625, 55);
+  ctx.lineTo(750, 95);
+  ctx.lineTo(980, 130);
+  ctx.lineTo(1180, 148);
+  ctx.lineTo(1450, 120);
+  if (showFullCliffWall) {
+    // Full right-side cliff rock wall extending deep down (as seen in wide shot frame_09.jpg)
+    ctx.lineTo(1450, 2900);
+    ctx.lineTo(1180, 2900);
+    ctx.lineTo(1120, 2400);
+    ctx.lineTo(1060, 1950);
+    ctx.lineTo(1080, 1450);
+    ctx.lineTo(1010, 980);
+    ctx.lineTo(1025, 580);
+    ctx.lineTo(950, 360);
+    ctx.lineTo(960, 185);
+    ctx.lineTo(915, 130);
+  } else {
+    ctx.lineTo(1450, -80);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Rock shading facets
+  ctx.fillStyle = '#4B4335';
+  ctx.beginPath();
+  ctx.moveTo(640, 20);
+  ctx.lineTo(890, 80);
+  ctx.lineTo(1160, 115);
+  ctx.lineTo(1260, 65);
+  ctx.lineTo(760, -10);
+  ctx.closePath();
+  ctx.fill();
+
+  // Metal piton loop at cliff tip (600, 42)
+  ctx.strokeStyle = '#1F2937';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(604, 42, 12, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/**
+ * Draws the upside-down Grand Piano + Wooden Bench tied to the rope (`frame_07.jpg`, `frame_20.jpg`).
+ */
+function drawUpsideDownGrandPiano(
+  ctx: SKRSContext2D,
+  x: number,
+  y: number,
+  scale: number,
+  swayRad: number
+) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  ctx.rotate(swayRad);
+
+  // 1. Grand Piano curved dark body (tilted ~ -14 deg like frame_07.jpg)
+  ctx.save();
+  ctx.rotate(-0.22);
+
+  // Main black/charcoal piano case
+  ctx.fillStyle = '#2B2D2F';
+  ctx.strokeStyle = '#0D0E10';
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.moveTo(-260, -40);
+  ctx.lineTo(-290, -240);
+  ctx.quadraticCurveTo(-280, -370, -90, -350);
+  ctx.quadraticCurveTo(40, -330, 110, -210);
+  ctx.quadraticCurveTo(185, -180, 215, -90);
+  ctx.lineTo(285, -105);
+  ctx.quadraticCurveTo(300, -85, 275, -65);
+  ctx.lineTo(195, -35);
+  ctx.lineTo(-240, -15);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Darker inner rim shade
+  ctx.fillStyle = '#1E2022';
+  ctx.beginPath();
+  ctx.moveTo(-250, -55);
+  ctx.lineTo(190, -55);
+  ctx.lineTo(175, -125);
+  ctx.lineTo(-265, -115);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // White keyboard strip (88 keys bed)
+  const kbLeft = -230;
+  const kbRight = 175;
+  const kbTop = -55;
+  const kbHeight = 48;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.strokeStyle = '#0D0E10';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.rect(kbLeft, kbTop, kbRight - kbLeft, kbHeight);
+  ctx.fill();
+  ctx.stroke();
+
+  // White key dividers & Black sharp/flat keys
+  const numWhiteKeys = 18;
+  const keyW = (kbRight - kbLeft) / numWhiteKeys;
+  ctx.lineWidth = 3;
+  for (let k = 1; k < numWhiteKeys; k++) {
+    const kx = kbLeft + k * keyW;
+    ctx.beginPath();
+    ctx.moveTo(kx, kbTop);
+    ctx.lineTo(kx, kbTop + kbHeight);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#0D0E10';
+  for (let k = 0; k < numWhiteKeys - 1; k++) {
+    if (k % 7 === 2 || k % 7 === 6) continue;
+    const kx = kbLeft + (k + 0.65) * keyW;
+    ctx.fillRect(kx, kbTop, keyW * 0.58, kbHeight * 0.62);
+  }
+
+  // Criss-crossing braided ropes tying the grand piano
+  drawBraidedRope(ctx, -285, -210, -110, -345, 9);
+  drawBraidedRope(ctx, -275, -145, -60, -335, 9);
+  drawBraidedRope(ctx, -215, 2, -115, -345, 9);
+  drawBraidedRope(ctx, -205, 4, -75, -340, 9);
+
+  // Ropes suspending the wooden piano bench below the keyboard
+  drawBraidedRope(ctx, -25, -4, -15, 95, 7);
+  drawBraidedRope(ctx, 130, -4, 140, 95, 7);
+
+  // Wooden brown piano bench (upside down)
+  ctx.fillStyle = '#6A533D';
+  ctx.strokeStyle = '#0D0E10';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.rect(-75, 80, 255, 72);
+  ctx.fill();
+  ctx.stroke();
+
+  // Bench legs sticking out to the right
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.moveTo(180, 88);
+  ctx.lineTo(212, 68);
+  ctx.moveTo(180, 142);
+  ctx.lineTo(212, 122);
+  ctx.stroke();
+
+  // Ropes wrapped around the bench
+  drawBraidedRope(ctx, 110, 78, 132, 154, 7);
+  drawBraidedRope(ctx, 128, 78, 148, 154, 7);
+  drawBraidedRope(ctx, -38, 78, -22, 154, 7);
+
+  ctx.restore();
+  ctx.restore();
+}
+
+/**
+ * Draws a single Cyanide & Happiness ("Explosm") 2D Stickman character with:
+ * - Rectangular colored shirt with thick black outline + rope coils
+ * - Round warm-peach head (`#FFE299`) with thick black outline (`6px`)
+ * - Solid black oval eyes, expressive eyebrows, accessories (ski goggles, glasses, curly hair)
+ * - Audio-reactive lip-sync mouth (`mouthOpenAmt` 0..1)
+ * - Curved black noodle stick arms & legs + knife prop
+ */
+function drawCyanideStickmanCharacter(ctx: SKRSContext2D, ch: CyanideCharacterSpec, timeSec: number) {
+  const sc = ch.scale || 1.0;
+  ctx.save();
+  ctx.translate(ch.anchorX, ch.anchorY);
+  ctx.scale(sc, sc);
+  ctx.rotate(ch.tiltRad);
+
+  const shirtW = 86;
+  const shirtH = 98;
+  const headR = 72;
+
+  // If upsideDown (like the pianist in frame_07.jpg), head is at bottom (+Y) and legs at top (-Y)
+  const dirY = ch.upsideDown ? -1 : 1;
+
+  // 1. Curved black noodle stick legs
+  ctx.strokeStyle = '#0D0E10';
+  ctx.lineWidth = 7.5;
+  ctx.lineCap = 'round';
+  const legWiggle = Math.sin(timeSec * 5 + ch.armWavePhase) * 8;
+  ctx.beginPath();
+  // Left leg
+  ctx.moveTo(-24, (shirtH * 0.5) * dirY);
+  ctx.quadraticCurveTo(
+    -32 + legWiggle * 0.4,
+    (shirtH * 0.5 + 42) * dirY,
+    -18 + legWiggle,
+    (shirtH * 0.5 + 78) * dirY
+  );
+  // Right leg
+  ctx.moveTo(24, (shirtH * 0.5) * dirY);
+  ctx.quadraticCurveTo(
+    38 - legWiggle * 0.4,
+    (shirtH * 0.5 + 38) * dirY,
+    32 - legWiggle,
+    (shirtH * 0.5 + 74) * dirY
+  );
+  ctx.stroke();
+
+  // 2. Rectangular/trapezoidal colored shirt
+  ctx.fillStyle = ch.shirtColor;
+  ctx.strokeStyle = '#0D0E10';
+  ctx.lineWidth = 6.5;
+  ctx.beginPath();
+  ctx.roundRect(-shirtW / 2, -shirtH / 2, shirtW, shirtH, 6);
+  ctx.fill();
+
+  // Optional cyan plaid pattern (like the bottom guy with glasses in frame_14.jpg)
+  if (ch.shirtPattern === 'PLAID_CYAN') {
+    ctx.save();
+    ctx.clip();
+    ctx.strokeStyle = '#5EA8B8';
+    ctx.lineWidth = 3;
+    for (let px = -shirtW / 2; px <= shirtW / 2; px += 18) {
+      ctx.beginPath();
+      ctx.moveTo(px, -shirtH / 2);
+      ctx.lineTo(px, shirtH / 2);
+      ctx.stroke();
+    }
+    for (let py = -shirtH / 2; py <= shirtH / 2; py += 18) {
+      ctx.beginPath();
+      ctx.moveTo(-shirtW / 2, py);
+      ctx.lineTo(shirtW / 2, py);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  ctx.strokeStyle = '#0D0E10';
+  ctx.lineWidth = 6.5;
+  ctx.strokeRect(-shirtW / 2, -shirtH / 2, shirtW, shirtH);
+
+  // 3. Braided horizontal rope coils tied around the shirt (if tiedToRope)
+  if (ch.tiedToRope !== false) {
+    for (const ry of [-12, 2, 16]) {
+      drawBraidedRope(ctx, -shirtW / 2 - 4, ry, shirtW / 2 + 4, ry, 7);
+    }
+  }
+
+  // 4. Curved black noodle stick arms + optional Knife prop
+  const armWave = Math.sin(timeSec * 8 + ch.armWavePhase) * (ch.mouthOpenAmt > 0.15 ? 16 : 4);
+  ctx.strokeStyle = '#0D0E10';
+  ctx.lineWidth = 7.5;
+  ctx.lineCap = 'round';
+
+  // Left arm (holding knife if ch.prop === 'KNIFE', else gripping rope or gesturing)
+  const leftHandX = ch.prop === 'KNIFE' ? -78 : -58;
+  const leftHandY = (-18 + armWave) * dirY;
+  ctx.beginPath();
+  ctx.moveTo(-shirtW / 2, -18 * dirY);
+  ctx.quadraticCurveTo(-shirtW / 2 - 28, (6 + armWave * 0.5) * dirY, leftHandX, leftHandY);
+  ctx.stroke();
+
+  // Right arm
+  const rightHandX = 56;
+  const rightHandY = (-24 - armWave * 0.7) * dirY;
+  ctx.beginPath();
+  ctx.moveTo(shirtW / 2, -18 * dirY);
+  ctx.quadraticCurveTo(shirtW / 2 + 28, (-4 - armWave * 0.4) * dirY, rightHandX, rightHandY);
+  ctx.stroke();
+
+  // Draw Knife in left hand (`frame_02.jpg`, `frame_12.jpg`)
+  if (ch.prop === 'KNIFE') {
+    ctx.save();
+    ctx.translate(leftHandX, leftHandY);
+    ctx.rotate(-0.55 + Math.sin(timeSec * 10) * 0.08);
+    // Green handle
+    ctx.fillStyle = '#2F6F4E';
+    ctx.strokeStyle = '#0D0E10';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.roundRect(-12, -6, 28, 12, 3);
+    ctx.fill();
+    ctx.stroke();
+    // Crossguard
+    ctx.fillStyle = '#94A3B8';
+    ctx.beginPath();
+    ctx.roundRect(-16, -13, 7, 26, 2);
+    ctx.fill();
+    ctx.stroke();
+    // Sharp metallic white/silver blade
+    ctx.fillStyle = '#F8FAFC';
+    ctx.beginPath();
+    ctx.moveTo(-16, -9);
+    ctx.lineTo(-82, -2);
+    ctx.lineTo(-16, 9);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 5. Large Round Warm-Peach Head (`#FFE299`)
+  const headY = (-shirtH / 2 - headR + 8) * dirY;
+  ctx.save();
+  ctx.translate(0, headY);
+  if (ch.upsideDown) {
+    ctx.rotate(Math.PI);
+  }
+
+  // Optional pianist spiky black hair behind head (`frame_07.jpg`)
+  if (ch.accessory === 'PIANIST_HAIR') {
+    ctx.fillStyle = '#0D0E10';
+    ctx.beginPath();
+    ctx.moveTo(-headR * 0.7, -headR * 0.4);
+    ctx.lineTo(-headR * 1.15, -headR * 0.95);
+    ctx.lineTo(-headR * 0.3, -headR * 1.15);
+    ctx.lineTo(headR * 0.5, -headR * 1.1);
+    ctx.lineTo(headR * 0.95, -headR * 0.5);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Peach head circle
+  ctx.fillStyle = ch.headSkinColor || '#FFE299';
+  ctx.strokeStyle = '#0D0E10';
+  ctx.lineWidth = 6.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, headR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Optional Fluffy Brown Curly Hair (`frame_14.jpg` top lady)
+  if (ch.accessory === 'CURLY_HAIR_GLASSES') {
+    ctx.fillStyle = '#5A381E';
+    ctx.strokeStyle = '#0D0E10';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(-25, -headR + 4, 34, 0, Math.PI * 2);
+    ctx.arc(15, -headR - 6, 38, 0, Math.PI * 2);
+    ctx.arc(52, -headR + 12, 32, 0, Math.PI * 2);
+    ctx.arc(68, -18, 28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // 6. Solid Black Oval Eyes & Expressive Eyebrows (or Orange Ski Goggles)
+  const eyeLX = -22 + ch.lookX * 6;
+  const eyeRX = 22 + ch.lookX * 6;
+  const eyeY = -10 + ch.lookY * 6;
+
+  if (ch.accessory === 'ORANGE_GOGGLES') {
+    // Strap going up to crown of head
+    ctx.fillStyle = '#3F332A';
+    ctx.strokeStyle = '#0D0E10';
+    ctx.lineWidth = 4.5;
+    ctx.save();
+    ctx.rotate(-0.35);
+    ctx.fillRect(-headR + 4, -22, headR * 1.9, 20);
+    ctx.strokeRect(-headR + 4, -22, headR * 1.9, 20);
+    // Orange ski goggles lens (`frame_02.jpg`)
+    ctx.fillStyle = '#F99B45';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.roundRect(-52, -26, 98, 42, 16);
+    ctx.fill();
+    ctx.stroke();
+    // Peach reflection blobs inside goggles
+    ctx.fillStyle = '#FFD8A8';
+    ctx.beginPath();
+    ctx.arc(-20, -6, 12, 0, Math.PI * 2);
+    ctx.arc(18, -6, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  } else {
+    // Blink every ~3.4 seconds
+    const isBlinking = Math.sin(timeSec * 1.85 + ch.id * 2.1) > 0.96;
+    ctx.fillStyle = '#0D0E10';
+    ctx.strokeStyle = '#0D0E10';
+    ctx.lineWidth = 4.5;
+
+    if (isBlinking) {
+      ctx.beginPath();
+      ctx.moveTo(eyeLX - 10, eyeY);
+      ctx.lineTo(eyeLX + 10, eyeY);
+      ctx.moveTo(eyeRX - 10, eyeY);
+      ctx.lineTo(eyeRX + 10, eyeY);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.ellipse(eyeLX, eyeY, 8.5, 10.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(eyeRX, eyeY, 8.5, 10.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Eyebrows based on emotion
+    ctx.lineWidth = 4.5;
+    ctx.beginPath();
+    if (ch.emotion === 'ANGRY' || ch.emotion === 'SARCASTIC') {
+      ctx.moveTo(eyeLX - 13, eyeY - 22);
+      ctx.lineTo(eyeLX + 11, eyeY - 13);
+      ctx.moveTo(eyeRX + 13, eyeY - 22);
+      ctx.lineTo(eyeRX - 11, eyeY - 13);
+    } else if (ch.emotion === 'PANIC' || ch.emotion === 'SHOCKED') {
+      ctx.moveTo(eyeLX - 13, eyeY - 13);
+      ctx.lineTo(eyeLX + 11, eyeY - 23);
+      ctx.moveTo(eyeRX - 11, eyeY - 23);
+      ctx.lineTo(eyeRX + 13, eyeY - 13);
+    } else {
+      ctx.moveTo(eyeLX - 12, eyeY - 18);
+      ctx.lineTo(eyeLX + 12, eyeY - 18);
+      ctx.moveTo(eyeRX - 12, eyeY - 18);
+      ctx.lineTo(eyeRX + 12, eyeY - 18);
+    }
+    ctx.stroke();
+
+    // Optional Round Glasses (`frame_14.jpg`)
+    if (ch.accessory === 'ROUND_GLASSES' || ch.accessory === 'CURLY_HAIR_GLASSES') {
+      ctx.strokeStyle = ch.accessory === 'CURLY_HAIR_GLASSES' ? '#4C1D24' : '#6B5B3E';
+      ctx.lineWidth = 4.5;
+      ctx.beginPath();
+      ctx.arc(eyeLX, eyeY, 20, 0, Math.PI * 2);
+      ctx.arc(eyeRX, eyeY, 20, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(eyeLX + 20, eyeY);
+      ctx.lineTo(eyeRX - 20, eyeY);
+      ctx.stroke();
+    }
+  }
+
+  // 7. Audio-Reactive Lip-Sync Mouth (`mouthOpenAmt` 0.0 -> 1.0)
+  const mY = 26;
+  const open = Math.max(0, Math.min(1, ch.mouthOpenAmt));
+  ctx.strokeStyle = '#0D0E10';
+  ctx.fillStyle = '#0D0E10';
+  ctx.lineWidth = 4.2;
+
+  if (open > 0.55) {
+    // Wide open Cyanide & Happiness shouting mouth (black D-shape / kidney shape with white teeth bar or tongue)
+    const mw = 36 + open * 16;
+    const mh = 18 + open * 18;
+    ctx.beginPath();
+    ctx.roundRect(-mw / 2, mY - mh * 0.35, mw, mh, 8);
+    ctx.fill();
+    ctx.stroke();
+    // White teeth strip at top of open mouth
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.roundRect(-mw / 2 + 4, mY - mh * 0.35 + 2, mw - 8, 6, 2);
+    ctx.fill();
+  } else if (open > 0.16) {
+    // Medium talking oval mouth
+    const mw = 22 + open * 24;
+    const mh = 8 + open * 18;
+    ctx.beginPath();
+    ctx.ellipse(0, mY, mw * 0.5, mh * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // Closed mouth expression when listening
+    ctx.beginPath();
+    if (ch.emotion === 'SMUG') {
+      ctx.arc(0, mY - 4, 16, 0.15 * Math.PI, 0.85 * Math.PI);
+    } else if (ch.emotion === 'PANIC' || ch.emotion === 'ANGRY') {
+      ctx.arc(0, mY + 12, 15, 1.18 * Math.PI, 1.82 * Math.PI);
+    } else {
+      ctx.moveTo(-15, mY);
+      ctx.lineTo(15, mY);
+    }
+    ctx.stroke();
+  }
+
+  ctx.restore();
+  ctx.restore();
+}
+
+/**
+ * Synthesizes multi-character Spanish dialogue audio for a Cyanide & Happiness scene using `edge-tts`,
+ * concatenating each character's turn into a single scene MP3 and returning the exact timeline of
+ * who is speaking at any time `t` so the renderer animates the exact speaker's mouth!
+ */
+export interface SpeakerTimelineSegment {
+  speakerIndex: number;
+  startSec: number;
+  endSec: number;
+  emotion: 'PANIC' | 'ANGRY' | 'SARCASTIC' | 'SHOCKED' | 'DEADPAN' | 'SMUG';
+  text: string;
+}
+
+const SPANISH_CHARACTER_VOICES: Array<{ voice: string; pitch: string; rate: string }> = [
+  { voice: 'es-ES-AlvaroNeural', pitch: '+7Hz', rate: '+14%' }, // 0: Yellow Goggles Guy (panicked / energetic)
+  { voice: 'es-MX-JorgeNeural', pitch: '-5Hz', rate: '+10%' },  // 1: Red Shirt Guy (skeptical / intense)
+  { voice: 'es-AR-TomasNeural', pitch: '+2Hz', rate: '+12%' },  // 2: Purple Shirt Guy (sarcastic / sharp)
+  { voice: 'es-CO-GonzaloNeural', pitch: '-12Hz', rate: '+8%' }, // 3: Upside-down Pianist (dramatic / outraged)
+  { voice: 'es-CL-LorenzoNeural', pitch: '-3Hz', rate: '+10%' }, // 4: Glasses Guy
+  { voice: 'es-ES-ElviraNeural', pitch: '+9Hz', rate: '+12%' },  // 5: Glasses Lady
+];
+
+export async function synthesizeMultiCharacterSceneDialogueAsync(params: {
+  dialogueLines: CyanideDialogueLine[];
+  outputDir: string;
+  sceneNumber: number;
+  targetDurationSec: number;
+}): Promise<{ combinedAudioPath?: string; segments: SpeakerTimelineSegment[]; actualDurationSec: number }> {
+  fs.mkdirSync(params.outputDir, { recursive: true });
+  const segments: SpeakerTimelineSegment[] = [];
+  const lineFiles: string[] = [];
+  let cursorSec = 0.15;
+
+  for (let i = 0; i < params.dialogueLines.length; i++) {
+    const line = params.dialogueLines[i];
+    const cleanText = String(line.text || '').trim();
+    if (!cleanText) continue;
+
+    const slot = Math.abs(Number(line.speakerIndex) || 0) % SPANISH_CHARACTER_VOICES.length;
+    const preset = SPANISH_CHARACTER_VOICES[slot];
+    const voice = line.voice || preset.voice;
+    const pitch = line.pitch || preset.pitch;
+    const rate = line.rate || preset.rate;
+
+    const lineMp3 = path.join(params.outputDir, `sc${params.sceneNumber}_line_${i}.mp3`);
+    let dur = Math.max(1.4, Math.min(4.8, cleanText.split(/\s+/).length * 0.34));
+
+    try {
+      execFileSync(
+        'python3',
+        [
+          '-m',
+          'edge_tts',
+          '--voice',
+          voice,
+          `--pitch=${pitch}`,
+          `--rate=${rate}`,
+          '--text',
+          cleanText,
+          '--write-media',
+          lineMp3,
+        ],
+        { stdio: 'ignore', timeout: 18000 }
+      );
+      if (fs.existsSync(lineMp3) && fs.statSync(lineMp3).size > 400) {
+        lineFiles.push(lineMp3);
+        try {
+          const probeOut = execFileSync(
+            'ffprobe',
+            ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', lineMp3],
+            { encoding: 'utf-8', timeout: 5000 }
+          ).trim();
+          const parsedDur = parseFloat(probeOut);
+          if (Number.isFinite(parsedDur) && parsedDur > 0.3) {
+            dur = parsedDur;
+          }
+        } catch {}
+      }
+    } catch {}
+
+    segments.push({
+      speakerIndex: slot,
+      startSec: cursorSec,
+      endSec: cursorSec + dur,
+      emotion: line.emotion || 'PANIC',
+      text: cleanText,
+    });
+    cursorSec += dur + 0.18;
+  }
+
+  const totalDur = Math.max(params.targetDurationSec, Math.ceil(cursorSec + 0.4));
+
+  if (lineFiles.length === 0) {
+    return { segments, actualDurationSec: params.targetDurationSec };
+  }
+
+  const combinedAudioPath = path.join(params.outputDir, `sc${params.sceneNumber}_dialogue_full.mp3`);
+  try {
+    // Concatenate all character voice turns with a slight 150ms pause between turns
+    const listFile = path.join(params.outputDir, `sc${params.sceneNumber}_lines.txt`);
+    fs.writeFileSync(
+      listFile,
+      lineFiles.map((f) => `file '${f.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'),
+      'utf-8'
+    );
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c:a', 'libmp3lame', '-q:a', '3', combinedAudioPath],
+      { stdio: 'ignore', timeout: 15000 }
+    );
+  } catch {}
+
+  return {
+    combinedAudioPath: fs.existsSync(combinedAudioPath) ? combinedAudioPath : lineFiles[0],
+    segments,
+    actualDurationSec: totalDur,
+  };
+}
+
+/**
+ * Renders an entire Cyanide & Happiness ("Explosm") multi-character scene onto the 2D canvas
+ * for normalized progress `u` in [0, 1] and time `timeSec`.
+ */
+function renderCyanideExplosmFrame(
+  ctx: SKRSContext2D,
+  W: number,
+  H: number,
+  scene: StickmanChoreographyScene,
+  u: number,
+  timeSec: number,
+  segments: SpeakerTimelineSegment[]
+) {
+  // Determine who is currently speaking at `timeSec`
+  const activeSeg = segments.find((s) => timeSec >= s.startSec && timeSec <= s.endSec);
+  const activeSpeaker = activeSeg ? activeSeg.speakerIndex : -1;
+
+  // Syllabic lip-sync oscillation (11 Hz + 17 Hz harmonic) when character is speaking
+  const syllabicOpen =
+    activeSpeaker >= 0
+      ? Math.max(0.15, Math.min(1.0, 0.55 + 0.42 * Math.sin(timeSec * 36) * Math.cos(timeSec * 19)))
+      : 0;
+
+  // Gentle rope pendulum sway
+  const ropeSwayX = Math.sin(timeSec * 1.9) * 10;
+
+  // Determine camera target (Y position along the cliff rope & zoom level)
+  // World coordinates along the vertical rope:
+  // Piton at (604, 42)
+  // Char 0 (Yellow + Goggles + Knife): y = 260
+  // Char 1 (Red Shirt): y = 510
+  // Char 2 (Purple Shirt): y = 780
+  // Char 3 (Upside-Down Grand Piano + Pianist): y = 1280
+  // Char 4 & 5 (Glasses Couple): y = 1760 & 2040
+  let camX = 0;
+  let camY = 0;
+  let camZoom = 1.0;
+  let showFullCliffWall = false;
+
+  const act = scene.actionType;
+  if (act === 'CYANIDE_CLIFF_OPENING' || scene.sceneNumber === 1) {
+    // Matches frame_01.jpg -> frame_02.jpg: Starts wide showing cliff overhang, then zooms in on Yellow + Red!
+    const zProgress = easeInOutQuad(Math.min(1, u * 1.6));
+    camX = lerp(40, -20, zProgress);
+    camY = lerp(-40, 20, zProgress);
+    camZoom = lerp(0.88, 1.18, zProgress);
+  } else if (act === 'CYANIDE_KNIFE_ARGUMENT' || scene.sceneNumber === 2) {
+    // Matches frame_02.jpg / motion_grid_10s.jpg: Tight two-shot on Yellow Goggles holding knife & Red Shirt
+    camX = -30;
+    camY = 35;
+    camZoom = 1.24;
+  } else if (act === 'CYANIDE_PASS_KNIFE_PURPLE' || scene.sceneNumber === 3) {
+    // Matches frame_04.jpg & frame_12.jpg: Camera whip-pans down rope to Red Shirt + Purple Shirt
+    const panP = easeInOutQuad(Math.min(1, u * 2.2));
+    camX = -35;
+    camY = lerp(40, 315, panP);
+    camZoom = 1.32;
+  } else if (act === 'CYANIDE_PIANO_REVEAL' || scene.sceneNumber === 4) {
+    // Matches frame_07.jpg & motion_grid_45s.jpg: Whip-pan down to the Upside-Down Grand Piano + Pianist!
+    const panP = easeInOutQuad(Math.min(1, u * 2.0));
+    camX = -55;
+    camY = lerp(320, 890, panP);
+    camZoom = 1.15;
+  } else if (act === 'CYANIDE_COUPLE_GLASSES' || scene.sceneNumber === 5) {
+    // Matches frame_14.jpg: Whip-pan further down to Glasses Lady + Plaid Shirt Glasses Guy!
+    const panP = easeInOutQuad(Math.min(1, u * 2.0));
+    camX = -45;
+    camY = lerp(890, 1520, panP);
+    camZoom = 1.28;
+  } else if (act === 'CYANIDE_WIDE_TOWER_ZOOM' || scene.sceneNumber >= 6) {
+    // Matches frame_09.jpg: Dramatic wide zoom-out revealing the entire cliff wall + all characters + Grand Piano!
+    showFullCliffWall = true;
+    const zOut = easeInOutQuad(Math.min(1, u * 1.8));
+    camX = lerp(-40, 110, zOut);
+    camY = lerp(650, 420, zOut);
+    camZoom = lerp(0.95, 0.48, zOut);
+  } else {
+    // Dynamic auto-cut based on activeSpeaker!
+    if (activeSpeaker === 3) {
+      camX = -55;
+      camY = 890;
+      camZoom = 1.16;
+    } else if (activeSpeaker === 2) {
+      camX = -35;
+      camY = 315;
+      camZoom = 1.3;
+    } else if (activeSpeaker >= 4) {
+      camX = -45;
+      camY = 1520;
+      camZoom = 1.26;
+    } else {
+      camX = -25;
+      camY = 30;
+      camZoom = 1.22;
+    }
+  }
+
+  // Draw Sky + Wind Streaks + Rocky Cliff Overhang
+  drawCyanideCliffBackground(ctx, W, H, camX, camY, camZoom, timeSec, showFullCliffWall);
+
+  // Transform into World Space for Rope + Characters + Props
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(camZoom, camZoom);
+  ctx.translate(-W / 2 - camX, -H / 2 - camY);
+
+  const ropeTopX = 604;
+  const ropeTopY = 42;
+  const ropeBotX = 604 + ropeSwayX;
+  const ropeBotY = 2650;
+
+  // Main continuous vertical braided rope
+  drawBraidedRope(ctx, ropeTopX, ropeTopY, ropeBotX, ropeBotY, 10);
+
+  // Determine who holds the knife in this scene
+  const knifeHolder =
+    act === 'CYANIDE_PASS_KNIFE_PURPLE' || scene.sceneNumber === 3
+      ? u > 0.45
+        ? 2
+        : 1
+      : act === 'CYANIDE_CLIFF_OPENING' && u < 0.35
+        ? -1
+        : 0;
+
+  // 1. Character 0: Yellow Shirt + Orange Ski Goggles (Top of rope)
+  drawCyanideStickmanCharacter(
+    ctx,
+    {
+      id: 0,
+      shirtColor: '#FACC15',
+      anchorX: 598 + ropeSwayX * 0.15,
+      anchorY: 265,
+      tiltRad: -0.46,
+      accessory: 'ORANGE_GOGGLES',
+      prop: knifeHolder === 0 ? 'KNIFE' : 'NONE',
+      emotion: activeSpeaker === 0 ? (activeSeg?.emotion || 'PANIC') : 'PANIC',
+      mouthOpenAmt: activeSpeaker === 0 ? syllabicOpen : 0,
+      lookX: 0,
+      lookY: 1,
+      armWavePhase: 0.4,
+    },
+    timeSec
+  );
+
+  // 2. Character 1: Red Shirt Guy (Second on rope)
+  drawCyanideStickmanCharacter(
+    ctx,
+    {
+      id: 1,
+      shirtColor: '#B91C1C',
+      anchorX: 598 + ropeSwayX * 0.3,
+      anchorY: 515,
+      tiltRad: -0.44,
+      accessory: 'NONE',
+      prop: knifeHolder === 1 ? 'KNIFE' : 'NONE',
+      emotion: activeSpeaker === 1 ? (activeSeg?.emotion || 'ANGRY') : 'WORRIED' as any,
+      mouthOpenAmt: activeSpeaker === 1 ? syllabicOpen : 0,
+      lookX: 0,
+      lookY: activeSpeaker === 2 ? 1 : -1,
+      armWavePhase: 1.7,
+    },
+    timeSec
+  );
+
+  // 3. Character 2: Purple Shirt Guy (Third on rope)
+  drawCyanideStickmanCharacter(
+    ctx,
+    {
+      id: 2,
+      shirtColor: '#7C3AED',
+      anchorX: 605 + ropeSwayX * 0.48,
+      anchorY: 795,
+      tiltRad: 0.44,
+      accessory: 'NONE',
+      prop: knifeHolder === 2 ? 'KNIFE' : 'NONE',
+      emotion: activeSpeaker === 2 ? (activeSeg?.emotion || 'SARCASTIC') : 'ANGRY',
+      mouthOpenAmt: activeSpeaker === 2 ? syllabicOpen : 0,
+      lookX: -0.5,
+      lookY: -1,
+      armWavePhase: 3.1,
+    },
+    timeSec
+  );
+
+  // 4. Upside-Down Grand Piano + Pianist on Wooden Bench (Fourth on rope - exact match to frame_07.jpg!)
+  const pianoX = 560 + ropeSwayX * 0.68;
+  const pianoY = 1235;
+  drawUpsideDownGrandPiano(ctx, pianoX, pianoY, 0.92, Math.sin(timeSec * 2.2) * 0.025);
+
+  drawCyanideStickmanCharacter(
+    ctx,
+    {
+      id: 3,
+      shirtColor: '#18181B',
+      anchorX: pianoX + 12,
+      anchorY: pianoY + 135,
+      tiltRad: 0.08,
+      upsideDown: true,
+      tiedToRope: true,
+      accessory: 'PIANIST_HAIR',
+      prop: 'NONE',
+      emotion: activeSpeaker === 3 ? (activeSeg?.emotion || 'ANGRY') : 'SHOCKED',
+      mouthOpenAmt: activeSpeaker === 3 ? syllabicOpen : 0,
+      lookX: 0,
+      lookY: -1,
+      armWavePhase: 4.5,
+    },
+    timeSec
+  );
+
+  // 5. Character 4: Pink Shirt Lady with Curly Hair & Glasses (Fifth on rope - frame_14.jpg)
+  drawCyanideStickmanCharacter(
+    ctx,
+    {
+      id: 5,
+      shirtColor: '#EC4899',
+      anchorX: 598 + ropeSwayX * 0.82,
+      anchorY: 1695,
+      tiltRad: 0.42,
+      accessory: 'CURLY_HAIR_GLASSES',
+      prop: 'NONE',
+      emotion: activeSpeaker === 5 ? (activeSeg?.emotion || 'SHOCKED') : 'PANIC',
+      mouthOpenAmt: activeSpeaker === 5 ? syllabicOpen : 0,
+      lookX: 0,
+      lookY: 1,
+      armWavePhase: 2.2,
+    },
+    timeSec
+  );
+
+  // 6. Character 5: Cyan Plaid Shirt Guy with Round Glasses (Sixth on rope - frame_14.jpg)
+  drawCyanideStickmanCharacter(
+    ctx,
+    {
+      id: 4,
+      shirtColor: '#CFFAFE',
+      shirtPattern: 'PLAID_CYAN',
+      anchorX: 595 + ropeSwayX * 0.95,
+      anchorY: 1995,
+      tiltRad: -0.38,
+      accessory: 'ROUND_GLASSES',
+      prop: 'NONE',
+      emotion: activeSpeaker === 4 ? (activeSeg?.emotion || 'PANIC') : 'SHOCKED',
+      mouthOpenAmt: activeSpeaker === 4 ? syllabicOpen : 0,
+      lookX: 0,
+      lookY: -1,
+      armWavePhase: 5.2,
+    },
+    timeSec
+  );
+
+  ctx.restore();
+}
+
+/**
+ * Draws the classic mint-green 3D perspective room and brown wooden door (fallback if MINT_DOOR_CLASSIC is chosen).
  */
 function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: StickmanPose, propType: StickmanPropType) {
   const cornerX = 250;
   const ceilingCornerY = 175;
   const floorCornerY = 935;
 
-  // Back/Right wall (#CBEAE7)
   ctx.fillStyle = '#CBEAE7';
   ctx.fillRect(0, 0, W, H);
 
-  // Left perspective wall (#BCE0DD)
   ctx.fillStyle = '#BCE0DD';
   ctx.beginPath();
   ctx.moveTo(0, 0);
@@ -133,7 +1112,6 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   ctx.closePath();
   ctx.fill();
 
-  // Ceiling triangle (#B2DAD6)
   ctx.fillStyle = '#B2DAD6';
   ctx.beginPath();
   ctx.moveTo(0, 0);
@@ -142,7 +1120,6 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   ctx.closePath();
   ctx.fill();
 
-  // Floor polygon (#B5DBD8)
   ctx.fillStyle = '#B5DBD8';
   ctx.beginPath();
   ctx.moveTo(0, 935);
@@ -153,7 +1130,6 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   ctx.closePath();
   ctx.fill();
 
-  // Subtle architectural corner lines
   ctx.strokeStyle = '#8FB8B5';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
@@ -166,7 +1142,6 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   ctx.lineTo(cornerX, ceilingCornerY);
   ctx.stroke();
 
-  // Draw the perspective brown wooden door on the right wall
   const sx = pose.doorShakeX || 0;
   const doorLeftX = 430 + sx;
   const doorRightX = 655 + sx;
@@ -175,7 +1150,6 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   const doorBotLeftY = 1045;
   const doorBotRightY = 1165;
 
-  // Doorway interior (visible when door opens)
   ctx.fillStyle = '#92B8BA';
   ctx.beginPath();
   ctx.moveTo(doorLeftX, doorTopLeftY);
@@ -185,7 +1159,6 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   ctx.closePath();
   ctx.fill();
 
-  // Outer wooden door frame
   ctx.strokeStyle = '#5E3A1E';
   ctx.lineWidth = 10;
   ctx.beginPath();
@@ -195,7 +1168,6 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   ctx.lineTo(doorRightX, doorBotRightY);
   ctx.stroke();
 
-  // Door leaf hinged on the right side (doorRightX) swinging inward as doorOpenAngle goes 0 -> 1
   const openAmt = Math.max(0, Math.min(1, pose.doorOpenAngle));
   const freeEdgeX = lerp(doorLeftX, doorRightX - 45, openAmt);
   const freeTopY = lerp(doorTopLeftY, doorTopRightY + 35, openAmt);
@@ -213,11 +1185,9 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   ctx.fill();
   ctx.stroke();
 
-  // Metallic lock plate & round doorknob near the left (free) edge of the door
   const knobX = lerp(freeEdgeX + 36, doorRightX - 18, openAmt * 0.5);
   const knobY = lerp((freeTopY + freeBotY) * 0.52, (doorTopRightY + doorBotRightY) * 0.52, openAmt * 0.3);
 
-  // Silver backplate
   ctx.fillStyle = '#B8C0C8';
   ctx.strokeStyle = '#2B2B2B';
   ctx.lineWidth = 2.2;
@@ -226,111 +1196,31 @@ function drawRoomAndDoor(ctx: SKRSContext2D, W: number, H: number, pose: Stickma
   ctx.fill();
   ctx.stroke();
 
-  // Protruding round silver knob
   ctx.fillStyle = '#DCE2E8';
   ctx.beginPath();
   ctx.arc(knobX - 10, knobY, 13, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
-
-  // Extra props depending on story topic
-  if (propType === 'MOSQUITO') {
-    const t = pose.extraPropTime;
-    const mx = 340 + Math.sin(t * 9.5) * 150 + Math.cos(t * 4.2) * 55;
-    const my = 430 + Math.cos(t * 7.8) * 110;
-    // Animated flying mosquito with buzzing wings
-    ctx.save();
-    ctx.translate(mx, my);
-    ctx.fillStyle = '#E2E8F0';
-    ctx.beginPath();
-    ctx.ellipse(-6, -10 + Math.sin(t * 60) * 6, 14, 6, -0.4, 0, Math.PI * 2);
-    ctx.ellipse(6, -10 - Math.sin(t * 60) * 6, 14, 6, 0.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#1E293B';
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 12, 5, 0.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#1E293B';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(-12, 2);
-    ctx.lineTo(-26, 8);
-    ctx.stroke();
-    ctx.restore();
-  } else if (propType === 'SPIDER') {
-    const t = pose.extraPropTime;
-    const sy = 360 + Math.sin(t * 3.2) * 70;
-    ctx.strokeStyle = '#475569';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(410, 140);
-    ctx.lineTo(410, sy);
-    ctx.stroke();
-    ctx.fillStyle = '#0F172A';
-    ctx.beginPath();
-    ctx.arc(410, sy, 14, 0, Math.PI * 2);
-    ctx.fill();
-    for (let leg = -1; leg <= 1; leg += 1) {
-      ctx.beginPath();
-      ctx.moveTo(396, sy + leg * 5);
-      ctx.lineTo(382, sy + leg * 11 + Math.sin(t * 14 + leg) * 4);
-      ctx.moveTo(424, sy + leg * 5);
-      ctx.lineTo(438, sy + leg * 11 - Math.sin(t * 14 + leg) * 4);
-      ctx.stroke();
-    }
-  } else if (propType === 'GYM_BARBELL') {
-    const bx = 360;
-    const by = 995;
-    ctx.strokeStyle = '#334155';
-    ctx.lineWidth = 10;
-    ctx.beginPath();
-    ctx.moveTo(bx - 130, by);
-    ctx.lineTo(bx + 130, by);
-    ctx.stroke();
-    ctx.fillStyle = '#0F172A';
-    ctx.strokeStyle = '#475569';
-    ctx.lineWidth = 4;
-    for (const side of [-1, 1]) {
-      ctx.beginPath();
-      ctx.ellipse(bx + side * 115, by, 22, 68, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(bx + side * 138, by, 16, 52, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-  }
 }
 
-/**
- * Draws the expressive 2D white stickman with bean torso, big cartoon head, eyes, eyebrows, mouth, and IK limbs.
- */
 function drawStickmanCharacter(ctx: SKRSContext2D, pose: StickmanPose) {
   const hipX = pose.hipX;
   const hipY = pose.hipY;
-
-  // Shoulder & Neck position derived from hip + torsoAngle
   const torsoLen = 155;
   const shoulderX = hipX + Math.sin(pose.torsoAngle) * torsoLen;
   const shoulderY = hipY - Math.cos(pose.torsoAngle) * torsoLen;
-
   const headRadius = 74;
   const headCenterX = shoulderX + Math.sin(pose.torsoAngle * 0.6 + pose.headTilt) * (headRadius + 8);
   const headCenterY = shoulderY - Math.cos(pose.torsoAngle * 0.6 + pose.headTilt) * (headRadius + 8);
 
-  // 1. Floor drop shadow under character
   const shadowY = Math.max(pose.leftFoot.y, pose.rightFoot.y) + 8;
   ctx.fillStyle = 'rgba(70, 105, 102, 0.28)';
   ctx.beginPath();
   ctx.ellipse(hipX, shadowY, 95, 22, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Solve IK for Legs (thigh = 122, shin = 122)
   const leftLeg = solveTwoBoneIK(hipX - 14, hipY, pose.leftFoot.x, pose.leftFoot.y, 122, 122, -1);
   const rightLeg = solveTwoBoneIK(hipX + 14, hipY, pose.rightFoot.x, pose.rightFoot.y, 122, 122, -1);
-
-  // Solve IK for Arms (upper = 124, forearm = 124 so hands reach the doorknob cleanly)
   const leftArm = solveTwoBoneIK(shoulderX - 10, shoulderY + 12, pose.leftHand.x, pose.leftHand.y, 124, 124, 1);
   const rightArm = solveTwoBoneIK(shoulderX + 10, shoulderY + 12, pose.rightHand.x, pose.rightHand.y, 124, 124, 1);
 
@@ -344,8 +1234,6 @@ function drawStickmanCharacter(ctx: SKRSContext2D, pose: StickmanPose) {
     ctx.lineTo(ik.midX, ik.midY);
     ctx.lineTo(ik.endX, ik.endY);
     ctx.stroke();
-
-    // Black cartoon shoe
     ctx.fillStyle = '#111318';
     ctx.beginPath();
     ctx.ellipse(ik.endX + 16, ik.endY + 2, 24, 10, 0.08, 0, Math.PI * 2);
@@ -362,19 +1250,15 @@ function drawStickmanCharacter(ctx: SKRSContext2D, pose: StickmanPose) {
     ctx.lineTo(ik.midX, ik.midY);
     ctx.lineTo(ik.endX, ik.endY);
     ctx.stroke();
-
-    // Expressive black cartoon hand/glove
     ctx.fillStyle = '#111318';
     ctx.beginPath();
     ctx.arc(ik.endX, ik.endY, 13, 0, Math.PI * 2);
     ctx.fill();
   };
 
-  // Back leg & back arm first
   drawLimbLeg(hipX - 12, hipY, leftLeg);
   drawLimbArm(shoulderX - 8, shoulderY + 14, leftArm);
 
-  // 2. White bean-shaped torso with soft cel-shaded shadow and thick black outline
   ctx.save();
   ctx.translate((hipX + shoulderX) / 2, (hipY + shoulderY) / 2);
   ctx.rotate(pose.torsoAngle);
@@ -384,274 +1268,62 @@ function drawStickmanCharacter(ctx: SKRSContext2D, pose: StickmanPose) {
   ctx.beginPath();
   ctx.ellipse(0, 0, 38, torsoLen * 0.52, 0, 0, Math.PI * 2);
   ctx.fill();
-
-  // Subtle gray-blue cel shading on left side of torso
-  ctx.fillStyle = '#DCE6EA';
-  ctx.beginPath();
-  ctx.ellipse(-14, 4, 16, torsoLen * 0.44, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 38, torsoLen * 0.52, 0, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
 
-  // Optional red crowbar prop in hands
-  if (pose.showCrowbar) {
-    ctx.save();
-    ctx.strokeStyle = '#DC2626';
-    ctx.lineWidth = 12;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(rightArm.endX - 35, rightArm.endY + 30);
-    ctx.lineTo(rightArm.endX + 55, rightArm.endY - 25);
-    ctx.lineTo(rightArm.endX + 72, rightArm.endY - 10);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // Front leg & front arm
   drawLimbLeg(hipX + 12, hipY, rightLeg);
   drawLimbArm(shoulderX + 8, shoulderY + 14, rightArm);
 
-  // 3. Large White Cartoon Head
   ctx.save();
   ctx.translate(headCenterX, headCenterY);
   ctx.rotate(pose.headTilt);
-
-  // Base white sphere
   ctx.fillStyle = '#FFFFFF';
   ctx.strokeStyle = '#111318';
   ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.arc(0, 0, headRadius, 0, Math.PI * 2);
   ctx.fill();
-
-  // Subtle cel-shading crescent on left edge of head
-  ctx.fillStyle = '#E2ECEF';
-  ctx.beginPath();
-  ctx.arc(-10, 6, headRadius - 4, Math.PI * 0.55, Math.PI * 1.45);
-  ctx.fill();
-
-  // Re-stroke head outline cleanly
-  ctx.beginPath();
-  ctx.arc(0, 0, headRadius, 0, Math.PI * 2);
   ctx.stroke();
 
-  // 4. Expressive Cartoon Eyes & Mouth matching reference sheet (`all.png`)
   const eyeCenterX = 18;
   const eyeY = -8;
   const leftEyeX = eyeCenterX - 22;
   const rightEyeX = eyeCenterX + 18;
 
-  if (pose.expression === 'EXTREME_STRAIN' || pose.expression === 'PAIN_FALL') {
-    // Tightly squinting eyes (><) with angled brows
-    ctx.strokeStyle = '#111318';
-    ctx.lineWidth = 4.2;
-    // Left squinted eye
-    ctx.beginPath();
-    ctx.arc(leftEyeX, eyeY, 17, 0, Math.PI * 2);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(leftEyeX - 10, eyeY - 6);
-    ctx.lineTo(leftEyeX + 8, eyeY + 2);
-    ctx.lineTo(leftEyeX - 10, eyeY + 9);
-    ctx.stroke();
-
-    // Right squinted eye
-    ctx.beginPath();
-    ctx.arc(rightEyeX, eyeY, 17, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(rightEyeX + 10, eyeY - 6);
-    ctx.lineTo(rightEyeX - 8, eyeY + 2);
-    ctx.lineTo(rightEyeX + 10, eyeY + 9);
-    ctx.stroke();
-  } else {
-    // Big oval cartoon eyes
-    ctx.fillStyle = '#FFFFFF';
-    ctx.strokeStyle = '#111318';
-    ctx.lineWidth = 3.5;
-
-    ctx.beginPath();
-    ctx.ellipse(leftEyeX, eyeY, 17, 22, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.ellipse(rightEyeX, eyeY, 17, 22, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // Half-lowered eyelids for SMUG / CONFIDENT / IDEA expressions
-    if (pose.expression === 'SMUG' || pose.expression === 'CONFIDENT' || pose.expression === 'IDEA') {
-      ctx.fillStyle = '#E2ECEF';
-      for (const ex of [leftEyeX, rightEyeX]) {
-        ctx.beginPath();
-        ctx.ellipse(ex, eyeY - 9, 16, 11, 0, Math.PI, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(ex - 16, eyeY - 4);
-        ctx.lineTo(ex + 16, eyeY - 4);
-        ctx.stroke();
-      }
-    }
-
-    // Pupils
-    const px = pose.lookDirX * 6;
-    const py = pose.lookDirY * 5;
-    ctx.fillStyle = '#111318';
-    ctx.beginPath();
-    ctx.arc(leftEyeX + px, eyeY + py, 5.5, 0, Math.PI * 2);
-    ctx.arc(rightEyeX + px, eyeY + py, 5.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Eyebrows
+  ctx.fillStyle = '#FFFFFF';
   ctx.strokeStyle = '#111318';
-  ctx.lineWidth = 4;
-  if (pose.expression === 'STRAIN' || pose.expression === 'EXTREME_STRAIN') {
-    ctx.beginPath();
-    ctx.moveTo(leftEyeX - 14, eyeY - 26);
-    ctx.lineTo(leftEyeX + 12, eyeY - 16);
-    ctx.moveTo(rightEyeX + 14, eyeY - 26);
-    ctx.lineTo(rightEyeX - 12, eyeY - 16);
-    ctx.stroke();
-  } else if (pose.expression === 'WORRIED' || pose.expression === 'THINKING') {
-    ctx.beginPath();
-    ctx.moveTo(leftEyeX - 14, eyeY - 18);
-    ctx.lineTo(leftEyeX + 10, eyeY - 27);
-    ctx.moveTo(rightEyeX - 10, eyeY - 27);
-    ctx.lineTo(rightEyeX + 14, eyeY - 18);
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(leftEyeX - 12, eyeY - 24);
-    ctx.quadraticCurveTo(leftEyeX, eyeY - 30, leftEyeX + 12, eyeY - 23);
-    ctx.moveTo(rightEyeX - 12, eyeY - 23);
-    ctx.quadraticCurveTo(rightEyeX, eyeY - 30, rightEyeX + 12, eyeY - 24);
-    ctx.stroke();
-  }
+  ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.ellipse(leftEyeX, eyeY, 17, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(rightEyeX, eyeY, 17, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
 
-  // Mouth
+  const px = pose.lookDirX * 6;
+  const py = pose.lookDirY * 5;
+  ctx.fillStyle = '#111318';
+  ctx.beginPath();
+  ctx.arc(leftEyeX + px, eyeY + py, 5.5, 0, Math.PI * 2);
+  ctx.arc(rightEyeX + px, eyeY + py, 5.5, 0, Math.PI * 2);
+  ctx.fill();
+
   ctx.strokeStyle = '#111318';
   ctx.lineWidth = 3.8;
-  if (pose.expression === 'SMUG' || pose.expression === 'CONFIDENT' || pose.expression === 'IDEA') {
-    ctx.beginPath();
-    ctx.arc(16, 22, 18, 0.15 * Math.PI, 0.85 * Math.PI);
-    ctx.stroke();
-  } else if (pose.expression === 'STRAIN' || pose.expression === 'EXTREME_STRAIN') {
-    // Wavy grimace mouth from reference frames
-    ctx.beginPath();
-    ctx.moveTo(-2, 32);
-    ctx.quadraticCurveTo(8, 24, 16, 32);
-    ctx.quadraticCurveTo(24, 40, 34, 30);
-    ctx.stroke();
-  } else if (pose.expression === 'PAIN_FALL') {
-    // Open shouting/gritting mouth
-    ctx.fillStyle = '#FFFFFF';
-    ctx.beginPath();
-    ctx.roundRect(0, 22, 34, 20, 6);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(2, 32);
-    ctx.lineTo(32, 32);
-    ctx.stroke();
-  } else {
-    // Worried/frown curve
-    ctx.beginPath();
-    ctx.arc(18, 40, 14, 1.15 * Math.PI, 1.85 * Math.PI);
-    ctx.stroke();
-  }
-
-  // Sweat drops when straining
-  if (pose.sweatDrops > 0) {
-    ctx.fillStyle = '#38BDF8';
-    ctx.strokeStyle = '#0284C7';
-    ctx.lineWidth = 2;
-    const dropOffset = (pose.sweatDrops * 25) % 25;
-    ctx.beginPath();
-    ctx.ellipse(-48, -20 + dropOffset, 6, 11, 0.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  // Glowing Yellow Idea Lightbulb (`💡`) above the head (exact match to frame 15-16 of reference)
-  if (pose.showLightbulb > 0) {
-    const sc = easeOutBack(pose.showLightbulb);
-    ctx.save();
-    ctx.translate(0, -headRadius - 58);
-    ctx.scale(sc, sc);
-
-    // Glow rays
-    ctx.strokeStyle = '#FACC15';
-    ctx.lineWidth = 4;
-    for (let a = 0; a < 7; a++) {
-      const ang = -Math.PI + (a / 6) * Math.PI;
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(ang) * 34, Math.sin(ang) * 34);
-      ctx.lineTo(Math.cos(ang) * 48, Math.sin(ang) * 48);
-      ctx.stroke();
-    }
-
-    // Yellow bulb glass
-    ctx.fillStyle = '#FDE047';
-    ctx.strokeStyle = '#111318';
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.arc(0, 0, 24, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // Screw base
-    ctx.fillStyle = '#94A3B8';
-    ctx.beginPath();
-    ctx.roundRect(-10, 20, 20, 12, 3);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
-
+  ctx.beginPath();
+  ctx.arc(16, 22, 18, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.stroke();
   ctx.restore();
-
-  // Comic impact burst / sparks
-  if (pose.showImpactBurst) {
-    const { x, y, scale } = pose.showImpactBurst;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(scale, scale);
-    ctx.strokeStyle = '#FACC15';
-    ctx.fillStyle = '#FEF08A';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    for (let i = 0; i < 12; i++) {
-      const r = i % 2 === 0 ? 44 : 18;
-      const ang = (i * Math.PI) / 6;
-      const px = Math.cos(ang) * r;
-      const py = Math.sin(ang) * r;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
 }
 
-/**
- * Computes the exact 24fps skeletal pose for a given StickmanActionType and normalized time u in [0, 1].
- */
 export function evaluateStickmanScenePose(
   actionType: StickmanActionType,
   u: number,
   timeSec: number
 ): StickmanPose {
-  const basePose: StickmanPose = {
+  return {
     hipX: 250,
     hipY: 790,
     torsoAngle: 0,
@@ -663,9 +1335,9 @@ export function evaluateStickmanScenePose(
     rightHand: { x: 290, y: 740 },
     leftFoot: { x: 215, y: 1015 },
     rightFoot: { x: 285, y: 1015 },
-    doorOpenAngle: 0,
+    doorOpenAngle: actionType === 'PUSH_OPEN_AND_EXIT' ? u : 0,
     doorShakeX: 0,
-    showLightbulb: 0,
+    showLightbulb: actionType === 'THINK_LIGHTBULB_IDEA' ? u : 0,
     showCrowbar: false,
     showImpactBurst: null,
     sweatDrops: 0,
@@ -674,314 +1346,76 @@ export function evaluateStickmanScenePose(
     cameraPanY: 0,
     extraPropTime: timeSec,
   };
-
-  if (actionType === 'WALK_CONFIDENT') {
-    // First 60%: walk from left (x=115) to x=255 with realistic 2-step cycle; then hands on hips & reach for knob
-    if (u < 0.55) {
-      const p = u / 0.55;
-      const hx = lerp(115, 255, p);
-      const stepPhase = p * Math.PI * 6;
-      const bob = Math.abs(Math.sin(stepPhase)) * 14;
-      return {
-        ...basePose,
-        hipX: hx,
-        hipY: 790 - bob,
-        torsoAngle: 0.06,
-        expression: 'SMUG',
-        leftFoot: {
-          x: hx + Math.sin(stepPhase) * 55,
-          y: 1015 - Math.max(0, Math.cos(stepPhase)) * 28,
-        },
-        rightFoot: {
-          x: hx - Math.sin(stepPhase) * 55,
-          y: 1015 - Math.max(0, -Math.cos(stepPhase)) * 28,
-        },
-        leftHand: {
-          x: hx - Math.sin(stepPhase) * 45,
-          y: 745 + Math.cos(stepPhase) * 18,
-        },
-        rightHand: {
-          x: hx + Math.sin(stepPhase) * 45,
-          y: 745 - Math.cos(stepPhase) * 18,
-        },
-      };
-    } else if (u < 0.8) {
-      // Stand confidently with hands on hips (frames 3-4 of reference)
-      return {
-        ...basePose,
-        hipX: 255,
-        hipY: 790,
-        torsoAngle: -0.04,
-        expression: 'SMUG',
-        leftHand: { x: 215, y: 745 },
-        rightHand: { x: 292, y: 745 },
-        leftFoot: { x: 210, y: 1015 },
-        rightFoot: { x: 300, y: 1015 },
-      };
-    } else {
-      // Reach out right hand to grab the doorknob at (456, 650)
-      const p = easeInOutQuad((u - 0.8) / 0.2);
-      return {
-        ...basePose,
-        hipX: lerp(255, 310, p),
-        hipY: 790,
-        torsoAngle: lerp(-0.04, 0.16, p),
-        expression: 'CONFIDENT',
-        leftHand: { x: lerp(215, 265, p), y: lerp(745, 730, p) },
-        rightHand: { x: lerp(292, 456, p), y: lerp(745, 650, p) },
-        leftFoot: { x: lerp(210, 250, p), y: 1015 },
-        rightFoot: { x: lerp(300, 365, p), y: 1020 },
-      };
-    }
-  }
-
-  if (actionType === 'PULL_HANDLE_HARD') {
-    // Both hands locked on doorknob (455, 650), body leans way back pulling rhythmically (frames 6-8 of reference)
-    const pullCycle = Math.sin(u * Math.PI * 5);
-    const leanAmt = 0.24 + Math.max(0, pullCycle) * 0.16;
-    const jitter = Math.sin(u * 90) * 3.5;
-    return {
-      ...basePose,
-      hipX: 295 - Math.max(0, pullCycle) * 22 + jitter,
-      hipY: 800 + Math.max(0, pullCycle) * 16,
-      torsoAngle: -leanAmt,
-      headTilt: -0.08,
-      expression: pullCycle > 0.2 ? 'STRAIN' : 'WORRIED',
-      leftHand: { x: 452 + jitter, y: 646 },
-      rightHand: { x: 458 + jitter, y: 654 },
-      leftFoot: { x: 345, y: 1020 },
-      rightFoot: { x: 405, y: 1025 },
-      doorShakeX: jitter * 0.7,
-      sweatDrops: u,
-      cameraZoom: 1.08,
-    };
-  }
-
-  if (actionType === 'BRACE_FOOT_AND_FALL') {
-    // First 62%: braces right foot high on the door (435, 895) and pulls with extreme >< face (frames 9-11)
-    // Last 38%: hands slip off knob, flies backward and lands sitting on floor rubbing head (frames 12-14)
-    if (u < 0.62) {
-      const p = u / 0.62;
-      const shake = Math.sin(p * 110) * 5;
-      return {
-        ...basePose,
-        hipX: 285 - p * 18 + shake,
-        hipY: 798 + p * 14,
-        torsoAngle: -0.32 - p * 0.1,
-        headTilt: -0.15,
-        expression: 'EXTREME_STRAIN',
-        leftHand: { x: 450 + shake, y: 645 },
-        rightHand: { x: 456 + shake, y: 653 },
-        leftFoot: { x: 315, y: 1025 },
-        rightFoot: { x: 432, y: 885 }, // Foot braced against door!
-        doorShakeX: shake * 0.85,
-        sweatDrops: p,
-        cameraZoom: 1.12,
-      };
-    } else {
-      const p = easeInOutQuad((u - 0.62) / 0.38);
-      const sitHipX = lerp(195, 165, p);
-      const sitHipY = lerp(815, 975, Math.min(1, p * 1.4));
-      const rubbingHead = p > 0.55;
-      return {
-        ...basePose,
-        hipX: sitHipX,
-        hipY: sitHipY,
-        torsoAngle: lerp(-0.55, -0.22, p),
-        headTilt: rubbingHead ? 0.1 : -0.25,
-        expression: rubbingHead ? 'THINKING' : 'PAIN_FALL',
-        leftHand: rubbingHead
-          ? { x: sitHipX - 45, y: 1010 }
-          : { x: sitHipX + 85, y: sitHipY - 120 },
-        rightHand: rubbingHead
-          ? { x: sitHipX + 25, y: sitHipY - 195 } // scratching head
-          : { x: sitHipX + 115, y: sitHipY - 95 },
-        leftFoot: { x: sitHipX + 115, y: 1015 },
-        rightFoot: { x: sitHipX + 145, y: 1025 },
-      };
-    }
-  }
-
-  if (actionType === 'CROWBAR_PRY_SPARKS') {
-    const pump = Math.sin(u * Math.PI * 6);
-    const shake = Math.sin(u * 85) * 4;
-    return {
-      ...basePose,
-      hipX: 255 + pump * 18 + shake,
-      hipY: 800 + Math.abs(pump) * 14,
-      torsoAngle: 0.18 + pump * 0.16,
-      expression: pump > 0 ? 'EXTREME_STRAIN' : 'STRAIN',
-      leftHand: { x: 385, y: 680 + pump * 22 },
-      rightHand: { x: 405, y: 670 + pump * 22 },
-      leftFoot: { x: 205, y: 1015 },
-      rightFoot: { x: 335, y: 1020 },
-      showCrowbar: true,
-      doorShakeX: shake,
-      sweatDrops: u,
-      showImpactBurst:
-        pump > 0.45 ? { x: 452, y: 650, scale: 0.7 + (pump - 0.45) * 1.1 } : null,
-      cameraZoom: 1.1,
-    };
-  }
-
-  if (actionType === 'FLYING_KICK_BOUNCE') {
-    // 0..0.35 windup, 0.35..0.60 airborne karate kick into door, 0.60..1.0 bounce onto floor
-    if (u < 0.35) {
-      const p = easeInOutQuad(u / 0.35);
-      return {
-        ...basePose,
-        hipX: lerp(210, 140, p),
-        hipY: lerp(790, 825, p),
-        torsoAngle: lerp(0, -0.25, p),
-        expression: 'STRAIN',
-        leftHand: { x: 110, y: 740 },
-        rightHand: { x: 195, y: 710 },
-        leftFoot: { x: 110, y: 1015 },
-        rightFoot: { x: 210, y: 1015 },
-      };
-    } else if (u < 0.62) {
-      const p = easeInOutQuad((u - 0.35) / 0.27);
-      const hx = lerp(140, 320, p);
-      const hy = lerp(825, 670, Math.sin(p * Math.PI));
-      return {
-        ...basePose,
-        hipX: hx,
-        hipY: hy,
-        torsoAngle: -0.45,
-        expression: 'EXTREME_STRAIN',
-        leftHand: { x: hx - 60, y: hy - 90 },
-        rightHand: { x: hx + 50, y: hy - 70 },
-        leftFoot: { x: hx - 55, y: hy + 110 },
-        rightFoot: { x: lerp(hx + 40, 445, p), y: hy + 10 }, // Flying kick foot!
-        doorShakeX: p > 0.75 ? Math.sin(p * 120) * 9 : 0,
-        showImpactBurst: p > 0.72 ? { x: 448, y: 675, scale: 1.25 } : null,
-        cameraZoom: 1.14,
-      };
-    } else {
-      const p = easeInOutQuad((u - 0.62) / 0.38);
-      return {
-        ...basePose,
-        hipX: lerp(290, 185, p),
-        hipY: lerp(700, 975, p),
-        torsoAngle: -0.35,
-        expression: 'PAIN_FALL',
-        leftHand: { x: 145, y: 995 },
-        rightHand: { x: 225, y: 940 },
-        leftFoot: { x: 295, y: 1015 },
-        rightFoot: { x: 335, y: 1020 },
-      };
-    }
-  }
-
-  if (actionType === 'THINK_LIGHTBULB_IDEA') {
-    // Rises from sitting on floor -> stands thinking -> lightbulb pops above head! (frames 14-16 of reference)
-    if (u < 0.4) {
-      const p = easeInOutQuad(u / 0.4);
-      const hy = lerp(965, 795, p);
-      return {
-        ...basePose,
-        hipX: lerp(175, 235, p),
-        hipY: hy,
-        torsoAngle: lerp(-0.2, 0.05, p),
-        expression: 'THINKING',
-        leftHand: { x: 195, y: hy - 35 },
-        rightHand: { x: 255, y: hy - 180 },
-        leftFoot: { x: 195, y: 1015 },
-        rightFoot: { x: 275, y: 1015 },
-      };
-    } else {
-      const bulbProgress = Math.min(1, (u - 0.4) / 0.25);
-      return {
-        ...basePose,
-        hipX: 245,
-        hipY: 790,
-        torsoAngle: 0.04,
-        expression: 'IDEA',
-        leftHand: { x: 195, y: 760 },
-        rightHand: { x: 325, y: 715 },
-        leftFoot: { x: 205, y: 1015 },
-        rightFoot: { x: 285, y: 1015 },
-        showLightbulb: bulbProgress,
-        cameraZoom: 1.06,
-      };
-    }
-  }
-
-  if (actionType === 'PUSH_OPEN_AND_EXIT') {
-    // Gently pushes the door inward with one hand, door swings open (doorOpenAngle 0 -> 1), walks right through doorway (frames 17-20)
-    if (u < 0.45) {
-      const p = easeInOutQuad(u / 0.45);
-      return {
-        ...basePose,
-        hipX: lerp(250, 315, p),
-        hipY: 790,
-        torsoAngle: lerp(0.05, 0.16, p),
-        expression: 'SMUG',
-        leftHand: { x: lerp(205, 255, p), y: 755 },
-        rightHand: { x: lerp(330, 470, p), y: 665 },
-        leftFoot: { x: lerp(210, 265, p), y: 1015 },
-        rightFoot: { x: lerp(285, 360, p), y: 1015 },
-        doorOpenAngle: p * 0.85,
-      };
-    } else {
-      const p = (u - 0.45) / 0.55;
-      const hx = lerp(315, 640, p);
-      const stepPhase = p * Math.PI * 5;
-      return {
-        ...basePose,
-        hipX: hx,
-        hipY: 790 - Math.abs(Math.sin(stepPhase)) * 12,
-        torsoAngle: 0.05,
-        lookDirX: -0.6, // Looks back smugly at the viewer while exiting!
-        expression: 'SMUG',
-        leftHand: { x: hx - 35, y: 740 + Math.sin(stepPhase) * 20 },
-        rightHand: { x: hx + 35, y: 740 - Math.sin(stepPhase) * 20 },
-        leftFoot: { x: hx + Math.sin(stepPhase) * 48, y: 1015 },
-        rightFoot: { x: hx - Math.sin(stepPhase) * 48, y: 1015 },
-        doorOpenAngle: lerp(0.85, 1.0, p),
-      };
-    }
-  }
-
-  if (actionType === 'SWAT_MOSQUITO_CHAOS' || actionType === 'SPIDER_PANIC_BROOM') {
-    const wave = Math.sin(u * Math.PI * 8);
-    const jump = Math.abs(Math.cos(u * Math.PI * 4)) * 45;
-    const hx = 280 + Math.sin(u * Math.PI * 3) * 75;
-    return {
-      ...basePose,
-      hipX: hx,
-      hipY: 790 - jump,
-      torsoAngle: wave * 0.25,
-      expression: wave > 0 ? 'EXTREME_STRAIN' : 'SHOCKED',
-      leftHand: { x: hx - 65, y: 640 - wave * 70 },
-      rightHand: { x: hx + 85, y: 580 + wave * 85 },
-      leftFoot: { x: hx - 45, y: 1015 - jump * 0.6 },
-      rightFoot: { x: hx + 45, y: 1015 - jump * 0.6 },
-      showCrowbar: actionType === 'SPIDER_PANIC_BROOM',
-      sweatDrops: u,
-    };
-  }
-
-  // GYM_HEAVY_BARBELL
-  const strainShake = Math.sin(u * 100) * 4.5;
-  return {
-    ...basePose,
-    hipX: 360 + strainShake,
-    hipY: 855 + Math.sin(u * Math.PI) * 25,
-    torsoAngle: 0.35,
-    expression: 'EXTREME_STRAIN',
-    leftHand: { x: 300 + strainShake, y: 985 },
-    rightHand: { x: 420 + strainShake, y: 985 },
-    leftFoot: { x: 295, y: 1015 },
-    rightFoot: { x: 425, y: 1015 },
-    sweatDrops: u,
-    cameraZoom: 1.1,
-  };
 }
 
 /**
- * Renders a singleStickmanChoreographyScene at a true 24 FPS skeletal animation into an MP4 file,
- * piping raw RGBA frames from @napi-rs/canvas directly into FFmpeg along with comedic sound effects.
+ * Default Cyanide & Happiness ("Cliffhanger") Spanish dialogue lines per scene
+ * matching `ejemplo stickman.mp4` when a scene doesn't provide custom `dialogueLines`.
+ */
+function getDefaultCyanideDialogueForScene(scene: StickmanChoreographyScene): CyanideDialogueLine[] {
+  if (scene.dialogueLines && scene.dialogueLines.length > 0) {
+    return scene.dialogueLines;
+  }
+
+  // If narrationText has dialogue separated by " - " or quotes, parse it into character turns
+  const raw = String(scene.narrationText || '').trim();
+  if (raw.includes(':') || raw.includes('—') || raw.includes('-')) {
+    const parts = raw
+      .split(/(?:\r?\n|—| - )/g)
+      .map((s) => s.replace(/^[^:]{1,20}:\s*/, '').trim())
+      .filter((s) => s.length > 2);
+    if (parts.length >= 2) {
+      const baseSlot = ((scene.sceneNumber - 1) % 3);
+      return parts.map((p, idx) => ({
+        speakerIndex: (baseSlot + idx) % 4,
+        text: p,
+        emotion: idx % 2 === 0 ? 'PANIC' : 'SARCASTIC',
+      }));
+    }
+  }
+
+  const n = scene.sceneNumber;
+  if (n === 1) {
+    return [
+      { speakerIndex: 0, text: '¡Ah! ¡Hay demasiado peso en la cuerda! ¡No va a aguantar!', emotion: 'PANIC' },
+      { speakerIndex: 1, text: '¡Espera! ¿Qué vas a hacer con ese cuchillo, tío?', emotion: 'SHOCKED' },
+    ];
+  }
+  if (n === 2) {
+    return [
+      { speakerIndex: 0, text: '¡Tengo que cortar la cuerda! Lo siento mucho, amigo.', emotion: 'PANIC' },
+      { speakerIndex: 1, text: '¡Espera, déjame hacerlo a mí! ¡Aquí abajo hay otro más pesado!', emotion: 'ANGRY' },
+    ];
+  }
+  if (n === 3) {
+    return [
+      { speakerIndex: 1, text: '¡Toma el cuchillo! ¡Tenemos que cortar por debajo de nosotros!', emotion: 'PANIC' },
+      { speakerIndex: 2, text: '¿Qué te hace pensar que la cuerda te aguanta a ti? ¡Mejor cortemos el piano!', emotion: 'SARCASTIC' },
+    ];
+  }
+  if (n === 4) {
+    return [
+      { speakerIndex: 3, text: '¡Oye! ¡No he cargado este piano toda la montaña para que ahora me dejéis caer!', emotion: 'ANGRY' },
+      { speakerIndex: 2, text: '¡Lo siento mucho, pero el piano es demasiado pesado!', emotion: 'PANIC' },
+    ];
+  }
+  if (n === 5) {
+    return [
+      { speakerIndex: 3, text: '¡Tu madre es demasiado pesada!', emotion: 'SMUG' },
+      { speakerIndex: 5, text: '¡Pero bueno! ¡Retíralo ahora mismo!', emotion: 'ANGRY' },
+      { speakerIndex: 4, text: '¡Cielo, ahora no es el momento de discutir colgados de un precipicio!', emotion: 'PANIC' },
+    ];
+  }
+  return [
+    { speakerIndex: 0, text: '¡Un momento! ¿Por qué hay veinte personas y un piano atados a mi cuerda?', emotion: 'SHOCKED' },
+    { speakerIndex: 3, text: '¡Cállate y escucha mi solo de piano antes de que nos caigamos todos!', emotion: 'SMUG' },
+  ];
+}
+
+/**
+ * Renders a single StickmanChoreographyScene at 30 FPS into an MP4 file.
+ * By default uses the Cyanide & Happiness (`CYANIDE_EXPLOSM`) 2D vector style + multi-voice lip-sync
+ * identical to `ejemplo stickman.mp4`.
  */
 export async function renderAnimatedStickmanSceneToMp4Async(params: {
   scene: StickmanChoreographyScene;
@@ -989,33 +1423,50 @@ export async function renderAnimatedStickmanSceneToMp4Async(params: {
   voiceMp3Path?: string;
   fps?: number;
 }): Promise<void> {
-  const W = 720;
-  const H = 1280;
-  const fps = params.fps || 24;
-  const durationSec = Math.max(4, Math.min(18, Number(params.scene.durationSec) || 10));
-  const totalFrames = Math.round(durationSec * fps);
+  const isWidescreen = params.scene.aspectRatio !== '9:16';
+  const W = isWidescreen ? 1280 : 720;
+  const H = isWidescreen ? 720 : 1280;
+  const fps = params.fps || 30;
+  const useCyanideStyle = params.scene.visualStyle !== 'MINT_DOOR_CLASSIC';
 
+  const outputDir = path.dirname(params.outputMp4Path);
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  // Synthesize multi-character Spanish dialogue if in Cyanide & Happiness style
+  let segments: SpeakerTimelineSegment[] = [];
+  let effectiveVoiceMp3 = params.voiceMp3Path;
+  let durationSec = Math.max(4, Math.min(20, Number(params.scene.durationSec) || 8));
+
+  if (useCyanideStyle) {
+    const dialogueLines = getDefaultCyanideDialogueForScene(params.scene);
+    const synth = await synthesizeMultiCharacterSceneDialogueAsync({
+      dialogueLines,
+      outputDir,
+      sceneNumber: params.scene.sceneNumber,
+      targetDurationSec: durationSec,
+    });
+    segments = synth.segments;
+    durationSec = synth.actualDurationSec;
+    if (synth.combinedAudioPath) {
+      effectiveVoiceMp3 = synth.combinedAudioPath;
+    }
+  }
+
+  const totalFrames = Math.round(durationSec * fps);
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
 
-  // Build comedic procedural sound effect filter (footsteps, effort grunts, thud, ding lightbulb, door creak)
-  const act = params.scene.actionType;
-  let sfxExpr = `0.08*sin(2*PI*(180+60*sin(2*PI*3*t))*t)*exp(-2*mod(t,0.5))`;
-  if (act === 'WALK_CONFIDENT' || act === 'PUSH_OPEN_AND_EXIT') {
-    // Crisp footsteps + door creak
-    sfxExpr = `0.12*sin(2*PI*140*t)*exp(-14*mod(t,0.42))`;
-  } else if (act === 'THINK_LIGHTBULB_IDEA') {
-    // Bright cartoon "DING!" bell when lightbulb turns on
-    sfxExpr = `0.15*sin(2*PI*1046*t)*exp(-3.5*max(0,t-1.5))*gte(t,1.5)`;
-  } else if (act === 'BRACE_FOOT_AND_FALL' || act === 'FLYING_KICK_BOUNCE') {
-    // Strain rumble + comic impact thud
-    sfxExpr = `0.14*sin(2*PI*(110+45*sin(18*t))*t)*exp(-3*mod(t,0.65))`;
+  // Ambient mountain wind + rope creak + piano chord (when piano is on screen)
+  let sfxExpr = `0.03*sin(2*PI*(110+25*sin(2*PI*0.7*t))*t)+0.02*random(0)`;
+  if (params.scene.actionType === 'CYANIDE_PIANO_REVEAL' || params.scene.sceneNumber === 4 || params.scene.sceneNumber >= 6) {
+    // Dramatic C-minor piano chord + wind
+    sfxExpr = `0.06*(sin(2*PI*261.6*t)+sin(2*PI*311.1*t)+sin(2*PI*392.0*t))*exp(-0.8*mod(t,2.5))+0.02*random(0)`;
   }
 
   const hasVoice =
-    params.voiceMp3Path &&
-    fs.existsSync(params.voiceMp3Path) &&
-    fs.statSync(params.voiceMp3Path).size > 500;
+    effectiveVoiceMp3 &&
+    fs.existsSync(effectiveVoiceMp3) &&
+    fs.statSync(effectiveVoiceMp3).size > 400;
 
   const ffArgs: string[] = [
     '-y',
@@ -1034,13 +1485,13 @@ export async function renderAnimatedStickmanSceneToMp4Async(params: {
   if (hasVoice) {
     ffArgs.push(
       '-i',
-      params.voiceMp3Path!,
+      effectiveVoiceMp3!,
       '-f',
       'lavfi',
       '-i',
       `aevalsrc='${sfxExpr}':s=44100:d=${durationSec}`,
       '-filter_complex',
-      `[1:a]volume=1.35,apad=whole_dur=${durationSec}[v];[2:a]volume=0.55[sfx];[v][sfx]amix=inputs=2:duration=first[a]`,
+      `[1:a]volume=1.45,apad=whole_dur=${durationSec}[v];[2:a]volume=0.35[sfx];[v][sfx]amix=inputs=2:duration=first[a]`,
       '-map',
       '0:v:0',
       '-map',
@@ -1067,7 +1518,7 @@ export async function renderAnimatedStickmanSceneToMp4Async(params: {
     '-preset',
     'ultrafast',
     '-crf',
-    '20',
+    '19',
     '-pix_fmt',
     'yuv420p',
     '-c:a',
@@ -1077,7 +1528,7 @@ export async function renderAnimatedStickmanSceneToMp4Async(params: {
     '-ac',
     '2',
     '-b:a',
-    '128k',
+    '160k',
     params.outputMp4Path
   );
 
@@ -1098,17 +1549,16 @@ export async function renderAnimatedStickmanSceneToMp4Async(params: {
       while (frameIdx < totalFrames) {
         const u = frameIdx / Math.max(1, totalFrames - 1);
         const timeSec = frameIdx / fps;
-        const pose = evaluateStickmanScenePose(params.scene.actionType, u, timeSec);
 
-        ctx.save();
-        if (pose.cameraZoom && pose.cameraZoom !== 1) {
-          ctx.translate(W / 2, H / 2);
-          ctx.scale(pose.cameraZoom, pose.cameraZoom);
-          ctx.translate(-W / 2 + pose.cameraPanX, -H / 2 + pose.cameraPanY);
+        if (useCyanideStyle) {
+          renderCyanideExplosmFrame(ctx, W, H, params.scene, u, timeSec, segments);
+        } else {
+          const pose = evaluateStickmanScenePose(params.scene.actionType, u, timeSec);
+          ctx.save();
+          drawRoomAndDoor(ctx, W, H, pose, params.scene.propType);
+          drawStickmanCharacter(ctx, pose);
+          ctx.restore();
         }
-        drawRoomAndDoor(ctx, W, H, pose, params.scene.propType);
-        drawStickmanCharacter(ctx, pose);
-        ctx.restore();
 
         const rawRgba = canvas.data();
         frameIdx++;
