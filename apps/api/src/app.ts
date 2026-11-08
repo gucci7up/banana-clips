@@ -3148,7 +3148,7 @@ export async function createBananaApiApp(): Promise<Express> {
       });
 
       await db.query(
-        `UPDATE "Clip" SET "durationSec" = $1, explanation = $2 WHERE id = $3`,
+        `UPDATE "Clip" SET "durationSec" = $1, summary = $2 WHERE id = $3`,
         [
           result.newDurationSec,
           `⚡ Cold Open IA (Claude 5.5): Adelanto de s${result.climaxSecond} ("${result.teaserText}") • Debate: ${result.debateCtaQuestion}`,
