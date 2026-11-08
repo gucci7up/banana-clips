@@ -542,26 +542,33 @@ export default function AiMontagePage() {
                           type="text"
                           value={sc.title}
                           onChange={(e) => updateSceneField(idx, 'title', e.target.value)}
-                          className="rounded-lg border border-transparent bg-transparent px-2 py-0.5 text-xs font-extrabold text-white focus:border-zinc-700 focus:bg-[#16181F] focus:outline-none"
+                          className="w-64 sm:w-80 rounded-lg border border-transparent bg-transparent px-2 py-0.5 text-xs font-extrabold text-white focus:border-zinc-700 focus:bg-[#16181F] focus:outline-none"
                         />
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2 text-[11px]">
                         <select
-                          value={sc.actionType || 'WALK_CONFIDENT'}
+                          value={sc.actionType || 'CYANIDE_DIALOGUE_BANTER'}
                           onChange={(e) => updateSceneField(idx, 'actionType', e.target.value)}
                           className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-bold text-emerald-300"
                         >
-                          <option value="WALK_CONFIDENT">🏃‍♂️ Acción 24fps: Camina Confiado y Agarra Pomo</option>
-                          <option value="PULL_HANDLE_HARD">💪 Acción 24fps: Jala con Ambas Manos Sudando</option>
-                          <option value="BRACE_FOOT_AND_FALL">🦶 Acción 24fps: Apoya Pie en Puerta y Cae al Piso</option>
-                          <option value="CROWBAR_PRY_SPARKS">🔧 Acción 24fps: Usa Palanca con Chispas</option>
-                          <option value="FLYING_KICK_BOUNCE">🥋 Acción 24fps: Patada Voladora y Rebote</option>
-                          <option value="THINK_LIGHTBULB_IDEA">💡 Acción 24fps: Piensa en el Piso y Sale Bombillo</option>
-                          <option value="PUSH_OPEN_AND_EXIT">🚪 Acción 24fps: Empuja Puerta Suave y Sale</option>
-                          <option value="SWAT_MOSQUITO_CHAOS">🦟 Acción 24fps: Manotazos Locos (Mosquito)</option>
-                          <option value="SPIDER_PANIC_BROOM">🕷️ Acción 24fps: Pánico con Escoba (Araña)</option>
-                          <option value="GYM_HEAVY_BARBELL">🏋️‍♂️ Acción 24fps: Esfuerzo Pesa 500kg (Gimnasio)</option>
+                          <option value="CYANIDE_DIALOGUE_BANTER">🔥 IA Flow 30fps: Diálogo Actuado + Lip-Sync</option>
+                          <option value="CYANIDE_CLIFF_OPENING">🧗‍♂️ Cyanide 30fps: Precipicio y Cuerda (Plano Inicial)</option>
+                          <option value="CYANIDE_KNIFE_ARGUMENT">🔪 Cyanide 30fps: Discusión con Cuchillo</option>
+                          <option value="CYANIDE_PASS_KNIFE_PURPLE">🤝 Cyanide 30fps: Pasa el Cuchillo hacia Abajo</option>
+                          <option value="CYANIDE_PIANO_REVEAL">🎹 Cyanide 30fps: Revelación del Piano Boca Abajo</option>
+                          <option value="CYANIDE_COUPLE_GLASSES">👓 Cyanide 30fps: Pareja con Gafas Discutiendo</option>
+                          <option value="CYANIDE_WIDE_TOWER_ZOOM">🏔️ Cyanide 30fps: Zoom General de Todo el Precipicio</option>
+                          <option value="WALK_CONFIDENT">🏃‍♂️ Acción 30fps: Camina Confiado y Agarra Pomo</option>
+                          <option value="PULL_HANDLE_HARD">💪 Acción 30fps: Jala con Ambas Manos Sudando</option>
+                          <option value="BRACE_FOOT_AND_FALL">🦶 Acción 30fps: Apoya Pie en Puerta y Cae al Piso</option>
+                          <option value="CROWBAR_PRY_SPARKS">🔧 Acción 30fps: Usa Palanca con Chispas</option>
+                          <option value="FLYING_KICK_BOUNCE">🥋 Acción 30fps: Patada Voladora y Rebote</option>
+                          <option value="THINK_LIGHTBULB_IDEA">💡 Acción 30fps: Piensa en el Piso y Sale Bombillo</option>
+                          <option value="PUSH_OPEN_AND_EXIT">🚪 Acción 30fps: Empuja Puerta Suave y Sale</option>
+                          <option value="SWAT_MOSQUITO_CHAOS">🦟 Acción 30fps: Manotazos Locos (Mosquito)</option>
+                          <option value="SPIDER_PANIC_BROOM">🕷️ Acción 30fps: Pánico con Escoba (Araña)</option>
+                          <option value="GYM_HEAVY_BARBELL">🏋️‍♂️ Acción 30fps: Esfuerzo Pesa 500kg (Gimnasio)</option>
                         </select>
 
                         <span className="rounded-lg bg-zinc-800 px-2.5 py-1 font-bold text-zinc-300">

@@ -1148,7 +1148,7 @@ export async function callClaudeAnthropicAsync(params: {
   model?: string;
   anthropicApiKey?: string;
 }): Promise<string | null> {
-  const apiKey = (params.anthropicApiKey || DEFAULT_ANTHROPIC_CLAUDE_KEY).trim();
+  const apiKey = (params.anthropicApiKey || process.env.ANTHROPIC_API_KEY || DEFAULT_ANTHROPIC_CLAUDE_KEY).trim();
   if (!apiKey) return null;
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1165,7 +1165,7 @@ export async function callClaudeAnthropicAsync(params: {
         system: params.systemPrompt,
         messages: [{ role: 'user', content: params.userPrompt }],
       }),
-      signal: AbortSignal.timeout(16000),
+      signal: AbortSignal.timeout(24000),
     });
     if (res.ok) {
       const data: any = await res.json();
@@ -1380,7 +1380,7 @@ export async function callGrokXaiChatAsync(params: {
   model?: string;
   xaiApiKey?: string;
 }): Promise<string | null> {
-  const apiKey = (params.xaiApiKey || DEFAULT_XAI_GROK_KEY).trim();
+  const apiKey = (params.xaiApiKey || process.env.XAI_API_KEY || DEFAULT_XAI_GROK_KEY).trim();
   if (!apiKey) return null;
   try {
     const res = await fetch('https://api.x.ai/v1/chat/completions', {
@@ -1398,7 +1398,7 @@ export async function callGrokXaiChatAsync(params: {
         max_tokens: params.maxTokens || 280,
         temperature: params.temperature ?? 0.65,
       }),
-      signal: AbortSignal.timeout(14000),
+      signal: AbortSignal.timeout(24000),
     });
     if (res.ok) {
       const data: any = await res.json();
@@ -2472,64 +2472,62 @@ export async function generateStoryboardWithNvidiaNimAsync(params: {
   const actionSeq = defaultActionSequenceForProp(propType);
 
   try {
-    const sysPrompt = `Eres un dúo de dirección de animación 2D estilo "Cyanide & Happiness" (ExplosmEntertainment) doblado al español (igual al sketch viral de la cuerda y el piano en el precipicio).
-Devuelve ÚNICAMENTE un JSON válido con un arreglo de exactamente ${sceneCount} escenas para la idea del usuario.
-Cada escena debe tener diálogos rápidos, ácidos, sarcásticos y absurdos entre múltiples personajes:
-- speakerIndex 0: Personaje Amarillo con gafas de esquí y cuchillo (en pánico)
-- speakerIndex 1: Personaje Rojo (escéptico / indignado)
-- speakerIndex 2: Personaje Morado (sarcástico: "¿no podríamos cortar el piano?")
-- speakerIndex 3: Pianista colgado boca abajo con un piano de cola gigante ("¡El piano se queda! ¡Tu madre es demasiado pesada!")
-- speakerIndex 4: Hombre con gafas y camisa a cuadros
-- speakerIndex 5: Señora con gafas y pelo rizado ("¡Pero bueno! ¡Retíralo ahora mismo!")
+    const sysPrompt = `Eres un director de animación 2D estilo Cyanide & Happiness doblado al español.
+Devuelve ÚNICAMENTE un arreglo JSON válido de exactamente ${sceneCount} objetos para la historia que pida el usuario (NO uses comillas dobles dentro de los textos, usa comillas simples si necesitas citar).
+Cada objeto debe tener exactamente estas llaves:
+{
+  "sceneNumber": 1,
+  "title": "Escena 1: Título corto sobre la idea del usuario",
+  "narrationText": "¡Diálogo corto del Personaje 1 en español! — ¡Respuesta sarcástica o cómica del Personaje 2 en español!",
+  "visualPrompt": "${baseCharacterStyle}, detailed description in English of the characters and action for this scene",
+  "actionType": "CYANIDE_DIALOGUE_BANTER",
+  "cameraMotion": "ZOOM_IN",
+  "sfxType": "EFFORT"
+}`;
 
-Cada elemento del arreglo JSON debe tener:
-- "sceneNumber": número del 1 al ${sceneCount}
-- "title": título corto de la escena en español
-- "actionType": una de ["CYANIDE_CLIFF_OPENING", "CYANIDE_KNIFE_ARGUMENT", "CYANIDE_PASS_KNIFE_PURPLE", "CYANIDE_PIANO_REVEAL", "CYANIDE_COUPLE_GLASSES", "CYANIDE_WIDE_TOWER_ZOOM"]
-- "dialogueLines": arreglo de 2 o 3 líneas de diálogo: [{"speakerIndex": 0, "text": "...", "emotion": "PANIC" | "ANGRY" | "SARCASTIC" | "SHOCKED" | "SMUG"}]
-- "narrationText": resumen del diálogo separado por " — " (ej. "¡Hay demasiado peso! — ¡Espera, déjame hacerlo!")
-- "visualPrompt": descripción visual en inglés que empiece con "${baseCharacterStyle},"
-- "cameraMotion": uno de ["ZOOM_IN", "ZOOM_OUT", "PAN_RIGHT", "PAN_LEFT", "PUNCH_SHAKE"]
-- "sfxType": uno de ["EFFORT", "KNOCK", "CLANG", "EXPLOSION", "DOOR_CREAK", "LAUGH"]`;
-
-    // 1. Step A: Use Grok 4.20 FIRST to write authentic acid/dark-humor Cyanide & Happiness dialogue,
-    // or Claude 5.5 to structure the animation & lip-sync JSON!
+    // 1. Try Grok 4.20 FIRST, then Claude 5.5
     let llmRaw = await callGrokXaiChatAsync({
       systemPrompt: sysPrompt,
-      userPrompt: `Escribe el guion animado estilo Cyanide & Happiness de ${sceneCount} escenas (${totalDur}s) con diálogos doblados al español para: ${params.ideaPrompt}`,
-      maxTokens: 1600,
-      temperature: 0.78,
+      userPrompt: `Historia del usuario (${sceneCount} escenas, ${totalDur}s totales): ${params.ideaPrompt}`,
+      maxTokens: 1400,
+      temperature: 0.7,
     });
 
     if (!llmRaw) {
       llmRaw = await callClaudeAnthropicAsync({
         systemPrompt: sysPrompt,
-        userPrompt: `Crea las ${sceneCount} escenas animadas estilo Cyanide & Happiness con diálogos multi-personaje y giro absurdo para esta historia de ${totalDur} segundos: ${params.ideaPrompt}`,
-        maxTokens: 1500,
+        userPrompt: `Historia del usuario (${sceneCount} escenas, ${totalDur}s totales): ${params.ideaPrompt}`,
+        maxTokens: 1400,
       });
     }
 
     if (llmRaw) {
-      const jsonMatch = llmRaw.match(/\[[\s\S]*\]/);
+      const cleanedRaw = llmRaw.replace(/```json|```/gi, '').trim();
+      const jsonMatch = cleanedRaw.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         if (Array.isArray(parsed) && parsed.length >= 3) {
           return parsed.slice(0, sceneCount).map((item: any, idx: number) => {
-            const dLines = Array.isArray(item.dialogueLines)
-              ? item.dialogueLines
-                  .filter((d: any) => d && String(d.text || '').trim().length > 0)
-                  .map((d: any) => ({
-                    speakerIndex: Math.abs(Number(d.speakerIndex) || 0) % 6,
-                    text: String(d.text).trim(),
-                    emotion: (['PANIC', 'ANGRY', 'SARCASTIC', 'SHOCKED', 'DEADPAN', 'SMUG'].includes(d.emotion)
-                      ? d.emotion
-                      : 'PANIC') as any,
+            const rawNarration = String(
+              item.narrationText || `¡No puede ser con ${params.ideaPrompt.slice(0, 35)}! — ¡Tranquilo, tengo un plan peor!`
+            ).trim();
+            const splitTurns = rawNarration
+              .split(/\s*(?:—|-|\n)\s*/)
+              .map((s) => s.replace(/^[^:]{1,18}:\s*/, '').trim())
+              .filter((s) => s.length > 2);
+
+            const dLines =
+              Array.isArray(item.dialogueLines) && item.dialogueLines.length > 0
+                ? item.dialogueLines.map((d: any, dIdx: number) => ({
+                    speakerIndex: Math.abs(Number(d.speakerIndex ?? dIdx)) % 6,
+                    text: String(d.text || '').trim(),
+                    emotion: 'PANIC' as const,
                   }))
-              : undefined;
-            const joinedDialogue =
-              dLines && dLines.length > 0
-                ? dLines.map((d: any) => d.text).join(' — ')
-                : String(item.narrationText || `¡Hay demasiado peso en la cuerda! — ¡Espera, no cortes!`);
+                : splitTurns.map((t, tIdx) => ({
+                    speakerIndex: (idx + tIdx) % 4,
+                    text: t,
+                    emotion: (tIdx % 2 === 0 ? 'PANIC' : 'SARCASTIC') as any,
+                  }));
 
             return {
               sceneNumber: idx + 1,
@@ -2543,7 +2541,7 @@ Cada elemento del arreglo JSON debe tener:
               visualPrompt: String(item.visualPrompt || '').includes('stickman')
                 ? String(item.visualPrompt)
                 : `${baseCharacterStyle}, ${String(item.visualPrompt || params.ideaPrompt)}`,
-              narrationText: joinedDialogue,
+              narrationText: rawNarration,
               cameraMotion: (['ZOOM_IN', 'ZOOM_OUT', 'PAN_RIGHT', 'PAN_LEFT', 'PUNCH_SHAKE'].includes(item.cameraMotion)
                 ? item.cameraMotion
                 : 'ZOOM_IN') as StorySceneSpec['cameraMotion'],
@@ -2557,6 +2555,404 @@ Cada elemento del arreglo JSON debe tener:
       }
     }
   } catch {}
+
+  const ideaClean = (params.ideaPrompt || '').trim();
+
+  // Topic-specific fallback 1: Mosquito at 3 AM (`MOSQUITO`)
+  if (propType === 'MOSQUITO') {
+    const mosquitoScenes: StorySceneSpec[] = [
+      {
+        sceneNumber: 1,
+        title: 'Escena 1: Zumbido Mortal a las 3:00 AM 🦟',
+        actionType: 'SWAT_MOSQUITO_CHAOS',
+        propType: 'MOSQUITO',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, lying in bed at 3 AM in a dark bedroom with wide bloodshot eyes as a giant annoying mosquito buzzes right next to his ear`,
+        narrationText: '¡Son las tres de la mañana, déjame dormir maldito zancudo! — ¡Bzzz, tu sangre huele a buffet libre, humano!',
+        cameraMotion: 'ZOOM_IN',
+        sfxType: 'EFFORT',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 2,
+        title: 'Escena 2: ¡Bofetada en Su Propia Cara!',
+        actionType: 'SWAT_MOSQUITO_CHAOS',
+        propType: 'MOSQUITO',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, slapping his own face with both hands trying to crush the mosquito while the mosquito laughs on his nose`,
+        narrationText: '¡Quieto ahí que te aplasto! ¡Ay, me pegué yo solo en toda la nariz! — ¡Jajaja, casi te reinicias el Windows tú mismo!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'CLANG',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 3,
+        title: 'Escena 3: La Raqueta Eléctrica de 10,000 Voltios ⚡',
+        actionType: 'CROWBAR_PRY_SPARKS',
+        propType: 'MOSQUITO',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, holding two glowing blue electric bug zapper rackets like lightsabers swinging wildly around the bedroom`,
+        narrationText: '¡Ahora sí vas a conocer diez mil voltios de pura venganza! — ¡Uy qué miedo, parece discoteca barata!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'EXPLOSION',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 4,
+        title: 'Escena 4: Destruye Media Habitación a Almohadazos',
+        actionType: 'FLYING_KICK_BOUNCE',
+        propType: 'MOSQUITO',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, jumping in mid-air throwing pillows, lamps and a chair across the bedroom in total chaos`,
+        narrationText: '¡Toma almohada, toma lámpara y toma silla voladora! — ¡Oye tranquilo, que vas a tumbar el edificio entero!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'EXPLOSION',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 5,
+        title: 'Escena 5: El Mosquito Trae a Toda Su Familia 🦟🦟',
+        actionType: 'THINK_LIGHTBULB_IDEA',
+        propType: 'MOSQUITO',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, exhausted on the floor surrounded by twenty mosquitoes wearing tiny party hats`,
+        narrationText: '¡Por fin silencio... espera! ¿Quiénes son todos ustedes? — ¡Llamé a mis primos para el desayuno, gracias por abrir la ventana!',
+        cameraMotion: 'ZOOM_OUT',
+        sfxType: 'LAUGH',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 6,
+        title: 'Escena 6: Suena la Alarma de las 6:00 AM ⏰',
+        actionType: 'BRACE_FOOT_AND_FALL',
+        propType: 'MOSQUITO',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, alarm clock ringing at 6 AM as the sun rises and the mosquito waves goodbye with a tiny suitcase`,
+        narrationText: '¡No puede ser, ya son las seis de la mañana y tengo que ir a trabajar! — ¡Buenas noches campeón, yo sí me voy a dormir!',
+        cameraMotion: 'ZOOM_IN',
+        sfxType: 'LAUGH',
+        durationSec: perSceneDur,
+      },
+    ];
+    return mosquitoScenes.slice(0, sceneCount);
+  }
+
+  // Topic-specific fallback 2: Tiny Spider (`SPIDER`)
+  if (propType === 'SPIDER') {
+    const spiderScenes: StorySceneSpec[] = [
+      {
+        sceneNumber: 1,
+        title: 'Escena 1: Una Araña Diminuta en la Pared 🕷️',
+        actionType: 'WALK_CONFIDENT',
+        propType: 'SPIDER',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, screaming in terror pointing at a tiny cute spider hanging from a web thread in the living room`,
+        narrationText: '¡Auxilio, hay un monstruo de ocho patas en mi pared! — ¡Oye tranquilo, si mido dos milímetros y solo vine por el Wi-Fi!',
+        cameraMotion: 'ZOOM_IN',
+        sfxType: 'EFFORT',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 2,
+        title: 'Escena 2: Duelo a Escobazos Limpios 🧹',
+        actionType: 'SPIDER_PANIC_BROOM',
+        propType: 'SPIDER',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, swinging a giant broom in panic smashing pictures on the wall while the tiny spider dodges easily`,
+        narrationText: '¡Bájate de ahí, engendro del mal, toma escobazo! — ¡Fallaste otra vez, acabas de romper la tele nueva!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'CLANG',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 3,
+        title: 'Escena 3: ¡Saca el Lanzallamas Casero! 🔥',
+        actionType: 'CROWBAR_PRY_SPARKS',
+        propType: 'SPIDER',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, wearing safety goggles holding a comic aerosol spray can and lighter shooting flames at the wall`,
+        narrationText: '¡Si no sales por las buenas, quemo la casa entera! — ¡Estás completamente loco, llama a un psicólogo!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'EXPLOSION',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 4,
+        title: 'Escena 4: La Araña le Quita la Escoba',
+        actionType: 'FLYING_KICK_BOUNCE',
+        propType: 'SPIDER',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, backing into a corner terrified while the tiny spider holds the giant broom menacingly`,
+        narrationText: '¡Espera, cómo demonios levantaste tú la escoba?! — ¡Estuve yendo al gimnasio arácnido, ahora corre tú!',
+        cameraMotion: 'ZOOM_IN',
+        sfxType: 'CLANG',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 5,
+        title: 'Escena 5: Le Entrega el Contrato de Alquiler 📄',
+        actionType: 'THINK_LIGHTBULB_IDEA',
+        propType: 'SPIDER',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, signing a paper contract handed by the spider wearing a tiny top hat and glasses`,
+        narrationText: '¿Y este papel qué es? — ¡El título de propiedad, desde hoy la casa es mía y tú duermes en el patio!',
+        cameraMotion: 'ZOOM_OUT',
+        sfxType: 'KNOCK',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 6,
+        title: 'Escena 6: Expulsado de Su Propia Casa',
+        actionType: 'PUSH_OPEN_AND_EXIT',
+        propType: 'SPIDER',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, sitting outside with a suitcase while the spider sips coffee by the window`,
+        narrationText: '¡Me echó de mi propia casa una araña de jardín! — ¡Y no olvides pagar la luz el viernes, inquilino!',
+        cameraMotion: 'PAN_RIGHT',
+        sfxType: 'LAUGH',
+        durationSec: perSceneDur,
+      },
+    ];
+    return spiderScenes.slice(0, sceneCount);
+  }
+
+  // Topic-specific fallback 3: Gym 500kg Barbell (`GYM_BARBELL`)
+  if (propType === 'GYM_BARBELL') {
+    const gymScenes: StorySceneSpec[] = [
+      {
+        sceneNumber: 1,
+        title: 'Escena 1: Presumiendo en el Gimnasio 🏋️‍♂️',
+        actionType: 'WALK_CONFIDENT',
+        propType: 'GYM_BARBELL',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, skinny stickman flexing tiny noodle arms in front of a massive 500kg barbell at the gym`,
+        narrationText: '¡Miren todos, hoy voy a levantar quinientos kilos sin calentar! — ¡Amigo, tú pesas treinta kilos mojado, te vas a partir en dos!',
+        cameraMotion: 'ZOOM_IN',
+        sfxType: 'EFFORT',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 2,
+        title: 'Escena 2: Se Pone Rojo como un Tomate 🍅',
+        actionType: 'GYM_HEAVY_BARBELL',
+        propType: 'GYM_BARBELL',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, straining with bulging veins and red face trying to lift the huge barbell that does not move an inch`,
+        narrationText: '¡Uno, dos y arriba... ay mi columna vertebral! — ¡Oye, la barra ni siquiera se enteró de que la tocaste!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'EFFORT',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 3,
+        title: 'Escena 3: Sus Brazos se Estiran como Espagueti',
+        actionType: 'PULL_HANDLE_HARD',
+        propType: 'GYM_BARBELL',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, pulling so hard his black stick arms stretch long while sweating buckets in the gym`,
+        narrationText: '¡Creo que subió un milímetro, sácame la foto rápido! — ¡Lo único que subió fue tu presión arterial!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'CLANG',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 4,
+        title: 'Escena 4: Sale Volando por el Aire',
+        actionType: 'BRACE_FOOT_AND_FALL',
+        propType: 'GYM_BARBELL',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, slipping and launching backward onto the gym floor in a comedic heap`,
+        narrationText: '¡Llamen a una ambulancia que veo lucecitas de colores! — ¡Te dije que empezaras con las mancuernas rosas de medio kilo!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'EXPLOSION',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 5,
+        title: 'Escena 5: Pasa una Abuelita Limpiando el Piso 🧹',
+        actionType: 'THINK_LIGHTBULB_IDEA',
+        propType: 'GYM_BARBELL',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, a tiny old lady with glasses lifts the 500kg barbell effortlessly with one hand to sweep under it`,
+        narrationText: '¡Permiso jovencito, que tengo que barrer debajo de este fierrito! — ¡¿Qué?! ¡La levantó con un solo dedo!',
+        cameraMotion: 'ZOOM_OUT',
+        sfxType: 'LAUGH',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 6,
+        title: 'Escena 6: Se Cancela la Membresía del Gym',
+        actionType: 'PUSH_OPEN_AND_EXIT',
+        propType: 'GYM_BARBELL',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, walking out of the gym eating a giant burger and fries happily`,
+        narrationText: '¡El gimnasio está sobrevalorado, mejor me voy por tres hamburguesas dobles! — ¡Esa sí que la levantas sin ayuda!',
+        cameraMotion: 'PAN_RIGHT',
+        sfxType: 'LAUGH',
+        durationSec: perSceneDur,
+      },
+    ];
+    return gymScenes.slice(0, sceneCount);
+  }
+
+  // Topic-specific fallback 4: The Door (`DOOR`)
+  if (propType === 'DOOR' || /puerta|door/i.test(ideaClean)) {
+    const doorScenes: StorySceneSpec[] = [
+      {
+        sceneNumber: 1,
+        title: 'Escena 1: Camina Confiado hacia la Puerta 🚪',
+        actionType: 'WALK_CONFIDENT',
+        propType: 'DOOR',
+        visualStyle: useClassicDoor ? 'MINT_DOOR_CLASSIC' : 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, walking confidently toward a closed wooden door and grabbing the handle`,
+        narrationText: '¡Mira qué fácil abro esta puerta en un segundo! — ¡Ten cuidado que esa puerta tiene truco!',
+        cameraMotion: 'ZOOM_IN',
+        sfxType: 'KNOCK',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 2,
+        title: 'Escena 2: Jala con Todas Sus Fuerzas',
+        actionType: 'PULL_HANDLE_HARD',
+        propType: 'DOOR',
+        visualStyle: useClassicDoor ? 'MINT_DOOR_CLASSIC' : 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, pulling a wooden door handle backward with both hands sweating heavily`,
+        narrationText: '¡Está atascada, alguien le puso pegamento industrial! — ¡Tira más fuerte, usa las piernas!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'EFFORT',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 3,
+        title: 'Escena 3: Apoya el Pie y Se Resbala al Piso',
+        actionType: 'BRACE_FOOT_AND_FALL',
+        propType: 'DOOR',
+        visualStyle: useClassicDoor ? 'MINT_DOOR_CLASSIC' : 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, bracing one foot against the door pulling hard then slipping and falling flat on the floor`,
+        narrationText: '¡A la una, a las dos... ay mi coxis! — ¡Tremendo costalazo te acabas de dar!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'CLANG',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 4,
+        title: 'Escena 4: Patada Voladora de Karate 🥋',
+        actionType: 'FLYING_KICK_BOUNCE',
+        propType: 'DOOR',
+        visualStyle: useClassicDoor ? 'MINT_DOOR_CLASSIC' : 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, delivering a flying karate kick in mid-air against the closed wooden door and bouncing off`,
+        narrationText: '¡Toma patada ninja destructora! — ¡La puerta sigue intacta y tú pareces calcomanía en el suelo!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'EXPLOSION',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 5,
+        title: 'Escena 5: Lee el Letrero que Dice EMPUJE 💡',
+        actionType: 'THINK_LIGHTBULB_IDEA',
+        propType: 'DOOR',
+        visualStyle: useClassicDoor ? 'MINT_DOOR_CLASSIC' : 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, sitting on the floor noticing a bright yellow lightbulb above his head and a sign saying PUSH`,
+        narrationText: '¡Un momento... ahí arriba hay un cartelito que dice EMPUJE hacia adentro! — ¡Eres un genio incomprendido!',
+        cameraMotion: 'ZOOM_OUT',
+        sfxType: 'EFFORT',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 6,
+        title: 'Escena 6: Empuja con Un Dedo y Sale como Rey',
+        actionType: 'PUSH_OPEN_AND_EXIT',
+        propType: 'DOOR',
+        visualStyle: useClassicDoor ? 'MINT_DOOR_CLASSIC' : 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, pushing the wooden door open effortlessly with one finger and walking out smiling smugly`,
+        narrationText: '¡Aquí no pasó absolutamente nada, permiso que voy saliendo! — ¡Sí claro, disimula el chichón en la frente!',
+        cameraMotion: 'PAN_RIGHT',
+        sfxType: 'LAUGH',
+        durationSec: perSceneDur,
+      },
+    ];
+    return doorScenes.slice(0, sceneCount);
+  }
+
+  // Topic-specific fallback 5: Custom user idea (when not about cliff/piano)
+  if (ideaClean.length > 3 && !/precipicio|cuerda|piano|cliff/i.test(ideaClean)) {
+    const shortTopic = ideaClean.slice(0, 110);
+    const customScenes: StorySceneSpec[] = [
+      {
+        sceneNumber: 1,
+        title: `Escena 1: Comienza el Caos (${shortTopic.slice(0, 32)}...)`,
+        actionType: 'CYANIDE_DIALOGUE_BANTER',
+        propType: 'CYANIDE_STAGE',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, two characters starting a hilarious situation about: ${shortTopic}`,
+        narrationText: `¡Tengo una idea brillante sobre ${shortTopic.slice(0, 50)}! — ¡Cada vez que dices eso terminamos en el hospital!`,
+        cameraMotion: 'ZOOM_IN',
+        sfxType: 'EFFORT',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 2,
+        title: 'Escena 2: Todo Sale Exactamente al Revés',
+        actionType: 'CYANIDE_DIALOGUE_BANTER',
+        propType: 'CYANIDE_STAGE',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, comedic disaster unfolding as they try: ${shortTopic}`,
+        narrationText: '¡Se suponía que esto era facilísimo, por qué está saliendo humo?! — ¡Porque no leíste las instrucciones, genio!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'CLANG',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 3,
+        title: 'Escena 3: El Plan B Es Aún Más Absurdo',
+        actionType: 'CYANIDE_DIALOGUE_BANTER',
+        propType: 'CYANIDE_STAGE',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, characters arguing with exaggerated expressions about: ${shortTopic}`,
+        narrationText: '¡Tranquilo, ahora aplicamos el Plan B con el doble de potencia! — ¡No, por favor, soy demasiado joven para volar por los aires!',
+        cameraMotion: 'ZOOM_IN',
+        sfxType: 'EXPLOSION',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 4,
+        title: 'Escena 4: Explosión de Comedia Física 💥',
+        actionType: 'CYANIDE_DIALOGUE_BANTER',
+        propType: 'CYANIDE_STAGE',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, chaotic cartoon commotion and flying props related to: ${shortTopic}`,
+        narrationText: '¡Agárrate de donde puedas que esto ya no tiene frenos! — ¡Te juro que si sobrevivimos no te vuelvo a hacer caso!',
+        cameraMotion: 'PUNCH_SHAKE',
+        sfxType: 'EXPLOSION',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 5,
+        title: 'Escena 5: Giro Inesperado Estilo Cyanide',
+        actionType: 'CYANIDE_DIALOGUE_BANTER',
+        propType: 'CYANIDE_STAGE',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, absurd plot twist reveal in the middle of: ${shortTopic}`,
+        narrationText: '¡Un momento... todo este tiempo había un botón para apagarlo?! — ¡Sí, pero me divertía verte sufrir!',
+        cameraMotion: 'ZOOM_OUT',
+        sfxType: 'LAUGH',
+        durationSec: perSceneDur,
+      },
+      {
+        sceneNumber: 6,
+        title: 'Escena 6: Remate Final Sarcástico 😂',
+        actionType: 'CYANIDE_DIALOGUE_BANTER',
+        propType: 'CYANIDE_STAGE',
+        visualStyle: 'CYANIDE_EXPLOSM',
+        visualPrompt: `${baseCharacterStyle}, funny finale shot with smug expressions after: ${shortTopic}`,
+        narrationText: '¡Bueno, al menos nadie salió herido... excepto tu dignidad! — ¡Cállate y vámonos antes de que llegue la policía!',
+        cameraMotion: 'PAN_RIGHT',
+        sfxType: 'LAUGH',
+        durationSec: perSceneDur,
+      },
+    ];
+    return customScenes.slice(0, sceneCount);
+  }
 
   // Default 6-scene Cyanide & Happiness ("Cliffhanger: La Cuerda y el Piano") Storyboard matching `ejemplo stickman.mp4` 1:1
   const cyanideCliffScenes: StorySceneSpec[] = [
@@ -2740,32 +3136,41 @@ function buildGenerativeVideoPromptForScene(sc: StorySceneSpec, idx: number): st
         .filter((s) => s.trim().length > 2)
         .map((text, i) => ({ speakerIndex: i % 2, text: text.trim() }));
 
-  let settingDesc =
-    'hanging from a vertical climbing rope on a rocky mountain cliff against a pale blue sky with white wind clouds';
-  if (idx === 0 || sc.actionType === 'CYANIDE_CLIFF_OPENING') {
-    settingDesc =
-      'hanging from a vertical climbing rope on a rocky mountain cliff. The top character wears a yellow shirt and orange ski goggles and holds a knife, and below him is a character in a red shirt';
-  } else if (idx === 1 || sc.actionType === 'CYANIDE_KNIFE_ARGUMENT') {
-    settingDesc =
-      'close-up of two 2D stickman characters hanging on a vertical climbing rope on a cliff: top character in yellow shirt with orange ski goggles waving a knife in panic, bottom character in red shirt arguing back';
-  } else if (idx === 2 || sc.actionType === 'CYANIDE_PASS_KNIFE_PURPLE') {
-    settingDesc =
-      'two 2D stickman characters hanging on a vertical climbing rope: character in a red shirt passing a knife down to a sarcastic character in a purple shirt below him';
-  } else if (idx === 3 || sc.actionType === 'CYANIDE_PIANO_REVEAL') {
-    settingDesc =
-      'a huge black grand piano with white and black keys and a wooden bench tied upside-down to a climbing rope on a cliff, with a 2D stickman pianist hanging upside-down shouting angrily while a purple shirt character looks down from above';
-  } else if (idx === 4 || sc.actionType === 'CYANIDE_COUPLE_GLASSES') {
-    settingDesc =
-      'two 2D stickman characters hanging on a vertical climbing rope: a woman in a pink shirt with brown curly hair and round glasses shouting indignantly, and a man in a cyan plaid shirt with round glasses below her';
-  } else if (idx >= 5 || sc.actionType === 'CYANIDE_WIDE_TOWER_ZOOM') {
-    settingDesc =
-      'wide shot of a rocky mountain cliff wall showing multiple 2D stickman characters in yellow, red, and purple shirts plus a black grand piano all hanging in a vertical line on a climbing rope';
+  const isCliffStory =
+    sc.propType === 'CLIFF_PIANO' ||
+    /cliff|rope|precipicio|cuerda|piano/i.test(`${sc.title || ''} ${sc.visualPrompt || ''}`);
+
+  let settingDesc = String(sc.visualPrompt || '').replace(baseStyle, '').replace(/^,\s*/, '').trim();
+
+  if (isCliffStory) {
+    if (idx === 0 || sc.actionType === 'CYANIDE_CLIFF_OPENING') {
+      settingDesc =
+        'hanging from a vertical climbing rope on a rocky mountain cliff. The top character wears a yellow shirt and orange ski goggles and holds a knife, and below him is a character in a red shirt';
+    } else if (idx === 1 || sc.actionType === 'CYANIDE_KNIFE_ARGUMENT') {
+      settingDesc =
+        'close-up of two 2D stickman characters hanging on a vertical climbing rope on a cliff: top character in yellow shirt with orange ski goggles waving a knife in panic, bottom character in red shirt arguing back';
+    } else if (idx === 2 || sc.actionType === 'CYANIDE_PASS_KNIFE_PURPLE') {
+      settingDesc =
+        'two 2D stickman characters hanging on a vertical climbing rope: character in a red shirt passing a knife down to a sarcastic character in a purple shirt below him';
+    } else if (idx === 3 || sc.actionType === 'CYANIDE_PIANO_REVEAL') {
+      settingDesc =
+        'a huge black grand piano with white and black keys and a wooden bench tied upside-down to a climbing rope on a cliff, with a 2D stickman pianist hanging upside-down shouting angrily while a purple shirt character looks down from above';
+    } else if (idx === 4 || sc.actionType === 'CYANIDE_COUPLE_GLASSES') {
+      settingDesc =
+        'two 2D stickman characters hanging on a vertical climbing rope: a woman in a pink shirt with brown curly hair and round glasses shouting indignantly, and a man in a cyan plaid shirt with round glasses below her';
+    } else if (idx >= 5 || sc.actionType === 'CYANIDE_WIDE_TOWER_ZOOM') {
+      settingDesc =
+        'wide shot of a rocky mountain cliff wall showing multiple 2D stickman characters in yellow, red, and purple shirts plus a black grand piano all hanging in a vertical line on a climbing rope';
+    }
   }
 
-  const d1 = lines[0]?.text || '¡Hay demasiado peso, tengo que cortar la cuerda!';
-  const d2 = lines[1]?.text || '¡Espera, abajo hay un piano de cola!';
+  const d1 = lines[0]?.text || String(sc.narrationText || sc.title || '¡No puede ser!').trim();
+  const d2 = lines[1]?.text || '';
 
-  return `${baseStyle}, ${settingDesc}. The first character shouts in Spanish with expressive lip-sync: '${d1}' and the second character replies in Spanish with expressive lip-sync: '${d2}'`;
+  if (d2) {
+    return `${baseStyle}, ${settingDesc}. The first character shouts in Spanish with expressive lip-sync: '${d1}' and the second character replies in Spanish with expressive lip-sync: '${d2}'`;
+  }
+  return `${baseStyle}, ${settingDesc}. The character speaks in Spanish with expressive lip-sync: '${d1}'`;
 }
 
 /**
