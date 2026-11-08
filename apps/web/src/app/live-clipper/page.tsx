@@ -42,6 +42,10 @@ export default function LiveClipperPage() {
       if (active) {
         setActiveVideoId(active.id);
         setLiveState('RECORDING');
+        if (active.originUrl && streamUrl === 'https://www.youtube.com/watch?v=jfKfPfyJRdk') {
+          setStreamUrl(active.originUrl);
+          setTitle(active.title || 'Directo En Vivo');
+        }
       }
     } catch {}
   };
@@ -129,7 +133,7 @@ export default function LiveClipperPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         {/* LEFT COLUMN (5 cols): Live Stream Controller */}
-        <div className="space-y-4 rounded-2xl border border-slate-800 bg-[#1B1E25] p-5 lg:col-span-5">
+        <div className="studio-card space-y-4 p-4 sm:p-5 lg:col-span-5">
           <div className="flex items-center justify-between">
             <span className="text-sm font-bold text-white">1. Conectar Directo En Vivo</span>
             <span
@@ -152,7 +156,7 @@ export default function LiveClipperPage() {
               value={streamUrl}
               onChange={(e) => setStreamUrl(e.target.value)}
               placeholder="https://www.youtube.com/watch?v=... o https://www.youtube.com/live/..."
-              className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-xs text-white focus:border-[#FFD43B] focus:outline-none"
+              className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0B0D12] p-2.5 text-xs text-white focus:border-[#FFD43B] focus:outline-none"
             />
           </div>
 
@@ -162,11 +166,11 @@ export default function LiveClipperPage() {
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-xs text-white focus:border-[#FFD43B] focus:outline-none"
+              className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0B0D12] p-2.5 text-xs text-white focus:border-[#FFD43B] focus:outline-none"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="block text-xs font-semibold text-[#94A3B8]">Duración de cada Corte</label>
               <select

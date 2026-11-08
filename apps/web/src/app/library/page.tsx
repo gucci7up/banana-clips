@@ -56,21 +56,21 @@ export default function MediaLibraryPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="relative">
+        <div className="flex w-full sm:w-auto flex-wrap items-center gap-2.5">
+          <div className="relative flex-1 sm:flex-initial">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-[#94A3B8]" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Filtrar por título..."
-              className="rounded-xl border border-slate-700 bg-[#1B1E25] pl-9 pr-3 py-2 text-xs text-white"
+              className="w-full sm:w-56 rounded-xl border border-slate-700 bg-[#131720] pl-9 pr-3 py-2 text-xs text-white focus:border-[#FFD43B] focus:outline-none"
             />
           </div>
           <select
             value={minScore}
             onChange={(e) => setMinScore(Number(e.target.value))}
-            className="rounded-xl border border-slate-700 bg-[#1B1E25] px-3 py-2 text-xs text-white"
+            className="rounded-xl border border-slate-700 bg-[#131720] px-3 py-2 text-xs text-white"
           >
             <option value={0}>Score: Todos (0+)</option>
             <option value={70}>Score: 70+ Alta Calidad</option>
@@ -80,12 +80,12 @@ export default function MediaLibraryPage() {
       </div>
 
       {/* Views Tabs */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex overflow-x-auto pb-1 gap-2 no-scrollbar">
         {[
-          { id: 'ALL', label: `Todos los archivos (${clips.length + montages.length + videos.length})` },
-          { id: 'CLIPS', label: `Clips & Cortes Live (${clips.length})` },
-          { id: 'MONTAGES', label: `Historias 60s & Montajes (${montages.length})` },
-          { id: 'VIDEOS', label: `Videos Originales (${videos.length})` },
+          { id: 'ALL', label: `Todos (${clips.length + montages.length + videos.length})` },
+          { id: 'CLIPS', label: `Clips & Live (${clips.length})` },
+          { id: 'MONTAGES', label: `Historias 60s (${montages.length})` },
+          { id: 'VIDEOS', label: `Originales (${videos.length})` },
           { id: 'FAVORITES', label: 'Favoritos' },
           { id: 'TRASH', label: 'Papelera' },
         ].map((t) => (
@@ -93,8 +93,10 @@ export default function MediaLibraryPage() {
             key={t.id}
             type="button"
             onClick={() => setTab(t.id as LibraryTab)}
-            className={`rounded-xl px-4 py-2 text-xs font-bold ${
-              tab === t.id ? 'bg-[#FFD43B] text-[#111318]' : 'bg-[#1B1E25] text-[#94A3B8]'
+            className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold transition ${
+              tab === t.id
+                ? 'bg-gradient-to-r from-[#FFD43B] to-[#FFB703] text-[#0B0D12] shadow'
+                : 'border border-slate-800 bg-[#131720] text-[#94A3B8] hover:text-white'
             }`}
           >
             {t.label}
@@ -108,12 +110,12 @@ export default function MediaLibraryPage() {
           <h2 className="text-base font-bold text-[#FFD43B]">
             Clips Generados, Cortes en Vivo e Historias ({filteredClips.length})
           </h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filteredClips.map((c) => (
               <div
                 key={c.id}
                 data-testid="library-clip-item"
-                className="flex flex-col justify-between rounded-2xl border border-slate-800 bg-[#1B1E25] p-4"
+                className="studio-card studio-card-hover flex flex-col justify-between p-4"
               >
                 <div>
                   {c.signedDownloadUrl && (
