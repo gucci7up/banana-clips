@@ -23,7 +23,7 @@ export default function LiveClipperPage() {
   const [streamUrl, setStreamUrl] = useState('https://www.youtube.com/watch?v=jfKfPfyJRdk');
   const [title, setTitle] = useState('Directo de YouTube En Vivo');
   const [clipDurationSec, setClipDurationSec] = useState<number>(20);
-  const [intervalSec, setIntervalSec] = useState<number>(35);
+  const [intervalSec, setIntervalSec] = useState<number>(600);
   const [autoCutEnabled, setAutoCutEnabled] = useState<boolean>(true);
 
   const [liveState, setLiveState] = useState<'IDLE' | 'CONNECTING' | 'RECORDING' | 'PROCESSING' | 'STOPPED' | 'FAILED'>('IDLE');
@@ -182,7 +182,7 @@ export default function LiveClipperPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-[#94A3B8]">Frecuencia de Auto-Corte</label>
+              <label className="block text-xs font-semibold text-[#94A3B8]">Bloque de Análisis del Live</label>
               <select
                 value={autoCutEnabled ? String(intervalSec) : 'MANUAL'}
                 onChange={(e) => {
@@ -195,10 +195,11 @@ export default function LiveClipperPage() {
                 }}
                 className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-xs font-bold text-white"
               >
-                <option value="30">Automático cada 30s</option>
-                <option value="45">Automático cada 45s</option>
-                <option value="60">Automático cada 60s</option>
-                <option value="MANUAL">Solo al pulsar &quot;Sacar Corte Ahora&quot;</option>
+                <option value="600">⭐ 1 Mejor Corte cada 10 Minutos (Recomendado)</option>
+                <option value="300">1 Mejor Corte cada 5 Minutos</option>
+                <option value="900">1 Mejor Corte cada 15 Minutos</option>
+                <option value="60">Modo Rápido: 1 Mejor Corte cada 1 Minuto</option>
+                <option value="MANUAL">Solo Manual al pulsar el botón</option>
               </select>
             </div>
           </div>
@@ -228,7 +229,7 @@ export default function LiveClipperPage() {
             disabled={!activeVideoId}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#FFD43B] px-4 py-3 text-xs font-black text-[#111318] shadow hover:brightness-105 disabled:opacity-40"
           >
-            <Zap className="h-4 w-4" /> ⚡ Sacar Corte En Vivo Ahora Mismo ({clipDurationSec}s)
+            <Zap className="h-4 w-4" /> ⚡ Analizar Siguiente Bloque de 10 Min y Sacar Mejor Corte ({clipDurationSec}s)
           </button>
 
           {/* Live Worker Real-time Status Box */}

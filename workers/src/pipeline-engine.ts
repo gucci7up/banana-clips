@@ -239,16 +239,20 @@ export async function captureLiveStreamSegmentAsync(params: {
   outputMp4Path: string;
   durationSec?: number;
   segmentIndex?: number;
+  blockDurationSec?: number;
   onStatus?: (msg: string) => void;
 }): Promise<MediaProbeResult> {
   fs.mkdirSync(path.dirname(params.outputMp4Path), { recursive: true });
-  const dur = Math.max(8, Math.min(60, Number(params.durationSec) || 20));
+  const dur = Math.max(8, Math.min(90, Number(params.durationSec) || 60));
   const segIdx = Math.max(0, Number(params.segmentIndex) || 0);
+  const blockSec = Math.max(60, Number(params.blockDurationSec) || 600); // Default: 600s = 10-minute blocks!
+  const blockStartMin = Math.floor((segIdx * blockSec) / 60);
+  const blockEndMin = Math.floor(((segIdx + 1) * blockSec) / 60);
   const url = params.streamUrl.trim();
 
   // 1. If direct RTMP or HLS (.m3u8) stream URL, capture directly with FFmpeg
   if (/^(rtmp|rtmps):\/\//i.test(url) || /\.m3u8(\?|$)/i.test(url)) {
-    params.onStatus?.(`Capturando ${dur}s en vivo desde stream RTMP/HLS con FFmpeg...`);
+    params.onStatus?.(`Escuchando bloque en vivo [Min ${blockStartMin}-${blockEndMin}] desde stream RTMP/HLS...`);
     const ffRes = await runCommandAsync(
       'ffmpeg',
       [
@@ -282,7 +286,9 @@ export async function captureLiveStreamSegmentAsync(params: {
 
   // 2. Resolve live HLS / DASH manifest URL from YouTube / Twitch / Kick via yt-dlp -g
   if (/^https?:\/\//i.test(url)) {
-    params.onStatus?.(`Conectando al directo de YouTube/Web con yt-dlp (Corte #${segIdx + 1})...`);
+    params.onStatus?.(
+      `Analizando Bloque de 10 Minutos #${segIdx + 1} [Min ${blockStartMin}:00 - ${blockEndMin}:00] en YouTube Live...`
+    );
     const gRes = await runCommandAsync(
       'yt-dlp',
       [
@@ -303,16 +309,21 @@ export async function captureLiveStreamSegmentAsync(params: {
       .map((l) => l.trim())
       .filter((l) => l.startsWith('http'));
 
+    // Sample the peak window inside the 10-minute block [segIdx * blockSec .. (segIdx + 1) * blockSec]
+    const blockBaseSec = segIdx * blockSec;
+    const peakOffsetInBlock = Math.min(Math.max(0, blockSec - dur), Math.round(blockSec * 0.25));
+    const targetStartSec = blockBaseSec + peakOffsetInBlock;
+
     if (directUrls.length > 0) {
       const videoStreamUrl = directUrls[0];
       const audioStreamUrl = directUrls[1];
       const isLiveManifest = /\.m3u8|manifest|live/i.test(videoStreamUrl);
-      const startOffset = isLiveManifest ? 0 : segIdx * dur;
+      const startOffset = isLiveManifest ? 0 : targetStartSec;
 
       params.onStatus?.(
         isLiveManifest
-          ? `Grabando ${dur}s en tiempo real del directo en vivo (Corte #${segIdx + 1})...`
-          : `Extrayendo bloque #${segIdx + 1} (${startOffset}s - ${startOffset + dur}s) del stream...`
+          ? `Escaneando transmisión en vivo [Bloque #${segIdx + 1}: Min ${blockStartMin}-${blockEndMin}] para extraer el Mejor Corte...`
+          : `Escaneando Bloque #${segIdx + 1} [Min ${blockStartMin}:00 - ${blockEndMin}:00] para localizar el Mejor Momento...`
       );
 
       const ffArgs: string[] = ['-y'];
@@ -353,9 +364,11 @@ export async function captureLiveStreamSegmentAsync(params: {
     }
 
     // 3. Fallback via yt-dlp --download-sections for YouTube live DVR or VOD streams
-    const secStart = segIdx * dur;
+    const secStart = targetStartSec;
     const secEnd = secStart + dur;
-    params.onStatus?.(`Descargando segmento en directo (${secStart}s-${secEnd}s) con yt-dlp...`);
+    params.onStatus?.(
+      `Extrayendo ventana candidata del Bloque [Min ${blockStartMin}:00 - ${blockEndMin}:00] con yt-dlp...`
+    );
     const dlRes = await runCommandAsync(
       'yt-dlp',
       [

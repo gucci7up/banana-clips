@@ -1582,20 +1582,23 @@ export async function createBananaApiApp(): Promise<Express> {
     clipDurationSec: number;
   }) => {
     const rt = liveSessionStatusMap.get(params.videoId) || {
-      currentStatusText: 'Iniciando detector de mejores momentos en vivo...',
+      currentStatusText: 'Iniciando detector de mejores momentos cada 10 minutos...',
       cutsCount: 0,
       isCapturing: false,
       autoCutEnabled: true,
       clipDurationSec: params.clipDurationSec,
-      intervalSec: 35,
+      intervalSec: 600,
     };
     if (rt.isCapturing) return null;
     rt.isCapturing = true;
     const cutNum = rt.cutsCount + 1;
     const targetDur = Math.max(10, Math.min(45, Number(params.clipDurationSec) || 20));
     const analysisWindowSec = Math.max(45, Math.min(90, Math.round(targetDur * 2.5)));
+    const blockSec = Math.max(60, Number(rt.intervalSec) || 600);
+    const blockStartMin = Math.floor(((cutNum - 1) * blockSec) / 60);
+    const blockEndMin = Math.floor((cutNum * blockSec) / 60);
 
-    rt.currentStatusText = `Escuchando ventana de ${analysisWindowSec}s del directo para detectar el Mejor Momento #${cutNum}...`;
+    rt.currentStatusText = `Escaneando Bloque #${cutNum} [Min ${blockStartMin}:00 - ${blockEndMin}:00] para extraer el Mejor Corte (${targetDur}s)...`;
     liveSessionStatusMap.set(params.videoId, rt);
 
     try {
@@ -1606,6 +1609,7 @@ export async function createBananaApiApp(): Promise<Express> {
         outputMp4Path: rawSegPath,
         durationSec: analysisWindowSec,
         segmentIndex: rt.cutsCount,
+        blockDurationSec: blockSec,
         onStatus: (msg) => {
           rt.currentStatusText = msg;
         },
@@ -1715,8 +1719,8 @@ export async function createBananaApiApp(): Promise<Express> {
       const firstWordsTitle = transcriptPreview.split(/\s+/).slice(0, 7).join(' ');
       const clipTitle =
         firstWordsTitle.length > 8
-          ? `🔥 Highlight #${cutNum}: "${firstWordsTitle}..." — ${params.sessionTitle}`
-          : `🔥 Mejor Momento En Vivo #${cutNum} — ${params.sessionTitle}`;
+          ? `🔥 Mejor Corte [Min ${blockStartMin}-${blockEndMin}]: "${firstWordsTitle}..."`
+          : `🔥 Mejor Corte [Min ${blockStartMin}-${blockEndMin}] — ${params.sessionTitle}`;
 
       await db.query(
         `INSERT INTO "Clip" ("id", "userId", "videoId", "title", "altTitle", "description", "hashtags", "keywords", "summary", "category", "language", "startSec", "endSec", "durationSec", "aspectRatio", "reframeMode", "storageObjectId", "previewPath", "thumbnailPath", "fingerprintHash")
@@ -1820,7 +1824,7 @@ export async function createBananaApiApp(): Promise<Express> {
       title = 'Directo de YouTube En Vivo',
       videoId,
       clipDurationSec = 20,
-      intervalSec = 35,
+      intervalSec = 600,
       autoCutEnabled = true,
     } = req.body || {};
 
@@ -1851,7 +1855,7 @@ export async function createBananaApiApp(): Promise<Express> {
       );
 
       const dur = Math.max(10, Math.min(60, Number(clipDurationSec) || 20));
-      const iv = Math.max(20, Math.min(300, Number(intervalSec) || 35));
+      const iv = Math.max(30, Math.min(1800, Number(intervalSec) || 600));
       const userId = req.user!.sub;
 
       liveSessionStatusMap.set(newVideoId, {
