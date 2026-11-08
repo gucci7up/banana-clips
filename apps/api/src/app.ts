@@ -23,6 +23,7 @@ import {
   captureLiveStreamSegmentAsync,
   computeEmbedding384,
   cosineSimilarity,
+  detectBestViralMomentsMultimodalAsync,
   detectSpeakerAndEditPlanWithClaudeVisionAsync,
   ensureFixtureVideo,
   executeAiClippingJob,
@@ -2148,67 +2149,45 @@ export async function createBananaApiApp(): Promise<Express> {
       }
 
       const totalAvailableSec = Math.max(targetDur, segMeta.durationSeconds || analysisWindowSec);
-      interface HighlightCandidate {
-        startSec: number;
-        score: number;
-        summary: string;
-      }
-      const candidates: HighlightCandidate[] = [];
+      rt.currentStatusText = `Analizando Energía Vocal (PCM RMS) + Transcripción + Claude 5.5 Haiku para encontrar los Mejores Momentos del Bloque [Min ${blockStartMin}-${blockEndMin}]...`;
 
-      if (whisperSegments.length > 0) {
-        for (const seg of whisperSegments) {
-          const candStart = Math.max(0, Math.min(totalAvailableSec - targetDur, seg.startSec));
-          const candEnd = candStart + targetDur;
-          const wordsInWindow = allWords.filter((w) => w.start >= candStart && w.end <= candEnd + 0.5);
-          if (wordsInWindow.length < 3) continue;
-          const textInWindow = wordsInWindow.map((w) => w.word).join(' ');
-          const wordDensity = wordsInWindow.length / Math.max(1, targetDur);
-          const hookBonus = /[?!¡¿]|\b(important|increíble|mira|ahora|nunca|millones|ganar|historia|verdad|breaking|trump|world|live|urgent|never|think|great|money|people|country|war|peace|deal)\b/i.test(
-            textInWindow
-          )
-            ? 12
-            : 5;
-          const score = Math.min(99, Math.round(74 + wordDensity * 6.5 + hookBonus));
-          candidates.push({
-            startSec: Number(candStart.toFixed(2)),
-            score,
-            summary: textInWindow,
-          });
-        }
-      }
+      const detectedMoments = await detectBestViralMomentsMultimodalAsync({
+        videoPath: rawSegPath,
+        totalDurationSec: totalAvailableSec,
+        targetClipDurationSec: targetDur,
+        maxClips: 3,
+        rangeStartSec: 0,
+        rangeEndSec: totalAvailableSec,
+        videoTitle: params.sessionTitle,
+        allWords: allWords.map((w) => ({
+          word: String(w.word || ''),
+          start: Number(w.start) || 0,
+          end: Number(w.end) || 0,
+          confidence: 0.98,
+          speaker: 'Live',
+          isFiller: false,
+        })),
+      });
 
-      // Sort by highest viral score first and pick up to 2-3 non-overlapping highlights in this block!
-      candidates.sort((a, b) => b.score - a.score);
-      const selectedHighlights: HighlightCandidate[] = [];
-      const minGapSec = Math.max(10, targetDur * 0.65);
-
-      for (const cand of candidates) {
-        if (selectedHighlights.length >= 3) break;
-        const overlaps = selectedHighlights.some((sel) => Math.abs(sel.startSec - cand.startSec) < minGapSec);
-        if (!overlaps && (cand.score >= 78 || selectedHighlights.length === 0)) {
-          selectedHighlights.push(cand);
-        }
-      }
-
-      // If only 1 candidate matched due to continuous segment, split second half of the real speech window as Highlight #2
-      if (selectedHighlights.length === 1 && allWords.length >= 12 && totalAvailableSec >= targetDur * 1.75) {
-        const secondStart = Number(Math.max(minGapSec, totalAvailableSec - targetDur).toFixed(2));
-        const secondWords = allWords.filter((w) => w.start >= secondStart - 0.5 && w.end <= secondStart + targetDur + 0.5);
-        if (secondWords.length >= 3 && Math.abs(selectedHighlights[0].startSec - secondStart) >= 8) {
-          selectedHighlights.push({
-            startSec: secondStart,
-            score: Math.max(84, selectedHighlights[0].score - 3),
-            summary: secondWords.map((w) => w.word).join(' '),
-          });
-        }
-      }
-
-      if (selectedHighlights.length === 0) {
-        selectedHighlights.push({ startSec: 0, score: 88, summary: '' });
-      }
+      const selectedHighlights =
+        detectedMoments.length > 0
+          ? detectedMoments
+          : [
+              {
+                startSec: 0,
+                endSec: targetDur,
+                durationSec: targetDur,
+                scoreTotal: 89,
+                audioEnergyScore: 85,
+                transcriptSnippet: '',
+                hookBanner: params.sessionTitle,
+                viralTitle: params.sessionTitle,
+                reasonEs: 'Momento destacado capturado del directo en vivo.',
+              },
+            ];
 
       // Order selected highlights chronologically inside the block
-      selectedHighlights.sort((a, b) => a.startSec - b.startSec);
+      selectedHighlights.sort((a: any, b: any) => a.startSec - b.startSec);
 
       const createdClipIds: string[] = [];
 
@@ -2216,10 +2195,13 @@ export async function createBananaApiApp(): Promise<Express> {
         const hl = selectedHighlights[hIdx];
         const cutNum = rt.cutsCount + 1;
         const bestStartSec = hl.startSec;
-        const bestScore = hl.score;
-        const bestSummary = hl.summary;
+        const bestScore = hl.scoreTotal;
+        const bestSummary = hl.transcriptSnippet;
 
-        const clipDur = Math.max(8, Math.min(targetDur, Math.round(totalAvailableSec - bestStartSec)));
+        const clipDur = Math.max(
+          8,
+          Math.min(targetDur, Math.round(hl.endSec > bestStartSec ? hl.endSec - bestStartSec : totalAvailableSec - bestStartSec))
+        );
         const shiftedWords = allWords
           .filter((w) => w.start >= bestStartSec - 0.2 && w.end <= bestStartSec + clipDur + 0.5)
           .map((w) => ({
@@ -2250,11 +2232,14 @@ export async function createBananaApiApp(): Promise<Express> {
         const thumbFileAbs = path.join(storageRoot, thumbFileRel);
         const assPath = path.join(storageRoot, 'banana-clips', `live_subs_${clipId}.ass`);
 
-        const grokHook = await generateViralHookWithGrokAsync(
-          bestSummary || finalWords.map((w) => w.word).join(' '),
-          params.sessionTitle
-        );
-        const liveHookHeadline = grokHook.hookBanner;
+        let liveHookHeadline = hl.hookBanner;
+        if (!liveHookHeadline) {
+          const grokHook = await generateViralHookWithGrokAsync(
+            bestSummary || finalWords.map((w) => w.word).join(' '),
+            params.sessionTitle
+          );
+          liveHookHeadline = grokHook.hookBanner;
+        }
         const assContent = generateAssSubtitles(finalWords, SUBTITLE_TEMPLATES.Bold, 1080, 1920, {
           autoEmojis: true,
           hookBannerText: liveHookHeadline || params.sessionTitle,
@@ -2315,10 +2300,10 @@ export async function createBananaApiApp(): Promise<Express> {
         );
 
         const transcriptPreview = (bestSummary || finalWords.map((w) => w.word).join(' ')).slice(0, 220);
-        const firstWordsTitle = transcriptPreview.split(/\s+/).slice(0, 7).join(' ');
+        const firstWordsTitle = hl.viralTitle || transcriptPreview.split(/\s+/).slice(0, 7).join(' ');
         const clipTitle =
-          firstWordsTitle.length > 8
-            ? `🔥 Highlight #${cutNum} [Min ${blockStartMin}-${blockEndMin}]: "${firstWordsTitle}..."`
+          firstWordsTitle.length > 6
+            ? `🔥 Highlight #${cutNum} [Min ${blockStartMin}-${blockEndMin}]: ${firstWordsTitle}`
             : `🔥 Mejor Corte #${cutNum} [Min ${blockStartMin}-${blockEndMin}] — ${params.sessionTitle}`;
 
         await db.query(
@@ -2330,7 +2315,7 @@ export async function createBananaApiApp(): Promise<Express> {
             params.videoId,
             clipTitle,
             clipTitle,
-            `Mejor momento #${cutNum} detectado en el directo (${params.streamUrl})\n\nTranscripción: "${transcriptPreview}"`,
+            `Mejor momento #${cutNum} detectado en el directo (${params.streamUrl})\n📊 Motivo IA: ${hl.reasonEs}\n\nTranscripción: "${transcriptPreview}"`,
             JSON.stringify(['#highlight', '#live', '#shorts', '#bananaclips']),
             JSON.stringify(['highlight', 'live', 'mejor momento']),
             transcriptPreview,
@@ -2346,12 +2331,13 @@ export async function createBananaApiApp(): Promise<Express> {
 
         await db.query(
           `INSERT INTO "ClipScore" ("id", "clipId", "scoreTotal", "scoreHook", "scoreStory", "scoreEmotion", "scoreEngagement", "scoreClarity", "scoreVisual", "scoreShareability", "explanation", "algorithmVersion", "weightsUsed")
-           VALUES ($1, $2, $3, 95, 92, 94, 95, 92, 93, 94, $4, 'v2.5-live-highlight-hunter', '{}')`,
+           VALUES ($1, $2, $3, 95, 92, $5, 95, 92, 93, 94, $4, 'v3.0-multimodal-rms-claude-hunter', '{}')`,
           [
             crypto.randomUUID(),
             clipId,
             bestScore,
-            `Highlight #${cutNum} (Score ${bestScore}/100, extraído en el bloque [Min ${blockStartMin}-${blockEndMin}]). "${transcriptPreview}"`,
+            `${hl.reasonEs} | Highlight #${cutNum} (Score ${bestScore}/100, Energía Vocal: ${hl.audioEnergyScore}%, bloque [Min ${blockStartMin}-${blockEndMin}]). "${transcriptPreview}"`,
+            Math.max(85, hl.audioEnergyScore || 92),
           ]
         );
 

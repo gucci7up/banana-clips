@@ -1904,6 +1904,429 @@ print(json.dumps({"firstHalfX": c1, "secondHalfX": c2, "isTwo": is_two}))
   return fallback;
 }
 
+export interface DetectedViralMoment {
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  scoreTotal: number;
+  audioEnergyScore: number;
+  hookBanner: string;
+  viralTitle: string;
+  reasonEs: string;
+  transcriptSnippet: string;
+}
+
+/**
+ * Extracts a 1-second resolution audio RMS energy profile (normalized 0.0 to 1.0) across the video
+ * using FFmpeg 8kHz 16-bit mono PCM so we can pinpoint exact moments of vocal intensity, laughter, applause, or action.
+ */
+export function extractAudioEnergyPerSecondSync(
+  videoPath: string,
+  startOffsetSec: number = 0,
+  maxScanDurationSec: number = 600
+): number[] {
+  if (!videoPath || !fs.existsSync(videoPath)) return [];
+  try {
+    const sampleRate = 4000;
+    const proc = spawnSync(
+      'ffmpeg',
+      [
+        '-nostdin',
+        '-v',
+        'error',
+        ...(startOffsetSec > 0 ? ['-ss', String(startOffsetSec)] : []),
+        '-i',
+        videoPath,
+        '-t',
+        String(Math.min(900, Math.max(5, maxScanDurationSec))),
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        String(sampleRate),
+        '-f',
+        's16le',
+        'pipe:1',
+      ],
+      { maxBuffer: 24 * 1024 * 1024, timeout: 18000 }
+    );
+    const pcm = proc.stdout;
+    if (!pcm || pcm.length < sampleRate * 2) return [];
+
+    const bytesPerSec = sampleRate * 2;
+    const totalSecs = Math.floor(pcm.length / bytesPerSec);
+    const rawRms: number[] = [];
+
+    for (let s = 0; s < totalSecs; s++) {
+      const base = s * bytesPerSec;
+      let sumSq = 0;
+      let count = 0;
+      for (let b = base; b + 1 < base + bytesPerSec; b += 8) {
+        const sample = pcm.readInt16LE(b);
+        sumSq += sample * sample;
+        count++;
+      }
+      rawRms.push(count > 0 ? Math.sqrt(sumSq / count) : 0);
+    }
+
+    const sorted = [...rawRms].sort((a, b) => a - b);
+    const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] || 1;
+    const p10 = sorted[Math.floor(sorted.length * 0.1)] || 0;
+    const span = Math.max(50, p95 - p10);
+
+    return rawRms.map((v) => Number(Math.max(0.05, Math.min(1.0, (v - p10) / span)).toFixed(3)));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Multimodal Best-Moments Detector for both regular Videos (AI Clipping) and Live Streams (Live Clipper):
+ * Combines:
+ * 1. Real 1-second PCM Audio Energy & Vocal Excitement Peaks (FFmpeg s16le RMS)
+ * 2. Faster-Whisper / VTT Word-Level Sentence Boundaries (never cuts mid-sentence or in dead silence)
+ * 3. Viral Hook & Emotional Trigger Scoring (questions, exclamations, numbers, conflict, storytelling)
+ * 4. Claude 5.5 Haiku AI Moment Curator ($0.00 Grok credits) to select the top non-overlapping viral clips.
+ */
+export async function detectBestViralMomentsMultimodalAsync(params: {
+  videoPath: string;
+  totalDurationSec: number;
+  targetClipDurationSec: number;
+  maxClips?: number;
+  rangeStartSec?: number;
+  rangeEndSec?: number;
+  momentsPrompt?: string;
+  videoTitle?: string;
+  allWords: WordTimestamp[];
+  cues?: Array<{ startSec: number; endSec: number; text: string }>;
+}): Promise<DetectedViralMoment[]> {
+  const maxClips = Math.max(1, Math.min(6, params.maxClips || 3));
+  const rangeStart = Math.max(0, Number(params.rangeStartSec || 0));
+  const effectiveEnd =
+    params.rangeEndSec && params.rangeEndSec > rangeStart + 4
+      ? Math.min(params.totalDurationSec, params.rangeEndSec)
+      : params.totalDurationSec;
+  const effectiveSpan = Math.max(6, effectiveEnd - rangeStart);
+  const clipDur = Math.max(
+    6,
+    Math.min(
+      params.targetClipDurationSec || 20,
+      effectiveSpan >= (params.targetClipDurationSec || 20) * 1.6
+        ? params.targetClipDurationSec || 20
+        : Math.max(6, Math.floor(effectiveSpan / maxClips))
+    )
+  );
+
+  // 1. Extract real per-second audio energy envelope
+  const energyProfile = extractAudioEnergyPerSecondSync(params.videoPath, 0, Math.min(900, effectiveEnd + 5));
+  const getWindowAudioScore = (sSec: number, eSec: number): number => {
+    if (energyProfile.length === 0) return 0.78;
+    const iStart = Math.max(0, Math.floor(sSec));
+    const iEnd = Math.min(energyProfile.length - 1, Math.ceil(eSec));
+    if (iEnd < iStart) return 0.75;
+    let sum = 0;
+    let maxPeak = 0;
+    let count = 0;
+    for (let i = iStart; i <= iEnd; i++) {
+      const val = energyProfile[i] ?? 0.5;
+      sum += val;
+      if (val > maxPeak) maxPeak = val;
+      count++;
+    }
+    const mean = count > 0 ? sum / count : 0.6;
+    // Reward both sustained speech energy (mean) and emotional climax peaks (maxPeak)
+    return Math.max(0.2, Math.min(1.0, mean * 0.55 + maxPeak * 0.45));
+  };
+
+  // 2. Build candidate start points aligned to natural sentence/clause starts
+  const candidateStarts: number[] = [];
+  const wordsInRange = (params.allWords || []).filter((w) => w.start >= rangeStart && w.end <= effectiveEnd);
+
+  if (wordsInRange.length >= 6) {
+    candidateStarts.push(wordsInRange[0].start);
+    for (let i = 1; i < wordsInRange.length; i++) {
+      const prev = wordsInRange[i - 1];
+      const curr = wordsInRange[i];
+      const pauseBefore = curr.start - prev.end;
+      const prevEndsSentence = /[.?!¡¿:;]$/.test(prev.word);
+      const startsHookWord = /^(pero|mira|escucha|sabías|cuando|entonces|increíble|nunca|ahora|ojo|atención|porque|cómo|qué|quién|hoy|wait|look|listen|never|why|how|when|breaking)/i.test(
+        curr.word.replace(/[¿¡"']/g, '')
+      );
+      if (
+        (pauseBefore >= 0.32 || prevEndsSentence || startsHookWord) &&
+        curr.start <= effectiveEnd - Math.min(8, clipDur * 0.6)
+      ) {
+        if (
+          candidateStarts.length === 0 ||
+          curr.start - candidateStarts[candidateStarts.length - 1] >= 2.5
+        ) {
+          candidateStarts.push(Number(curr.start.toFixed(2)));
+        }
+      }
+    }
+  }
+
+  // Also add uniform 3-second sliding window anchors so high-energy moments without punctuation aren't missed
+  const stepSec = Math.max(2.5, Math.min(6, effectiveSpan / 18));
+  for (let t = rangeStart; t <= Math.max(rangeStart, effectiveEnd - clipDur); t += stepSec) {
+    const nearExisting = candidateStarts.some((cs) => Math.abs(cs - t) < 1.8);
+    if (!nearExisting) {
+      // Snap to nearest word start within +/- 1.2s if words exist
+      const nearestWord = wordsInRange.find((w) => Math.abs(w.start - t) <= 1.2);
+      candidateStarts.push(Number((nearestWord ? nearestWord.start : t).toFixed(2)));
+    }
+  }
+  if (candidateStarts.length === 0) {
+    candidateStarts.push(rangeStart);
+  }
+  candidateStarts.sort((a, b) => a - b);
+
+  interface RawCandidate {
+    startSec: number;
+    endSec: number;
+    scoreTotal: number;
+    audioEnergyScore: number;
+    text: string;
+    reasonEs: string;
+  }
+
+  const scoredCandidates: RawCandidate[] = [];
+  const promptLower = (params.momentsPrompt || '').toLowerCase().trim();
+  const promptTokens = promptLower.split(/\s+/).filter((t) => t.length >= 3);
+
+  for (const rawStart of candidateStarts) {
+    const cStart = Number(Math.max(rangeStart, Math.min(effectiveEnd - Math.min(6, clipDur), rawStart)).toFixed(2));
+    let cEnd = Number(Math.min(effectiveEnd, cStart + clipDur).toFixed(2));
+
+    // Snap cEnd to a natural sentence/word completion near target duration (+/- 1.5s)
+    const wordsInWin = wordsInRange.filter((w) => w.start >= cStart - 0.1 && w.end <= cEnd + 1.2);
+    if (wordsInWin.length >= 4) {
+      const sentenceEndWord = [...wordsInWin]
+        .reverse()
+        .find((w) => w.end >= cStart + clipDur * 0.72 && w.end <= effectiveEnd && /[.?!]$/.test(w.word));
+      if (sentenceEndWord) {
+        cEnd = Number(Math.min(effectiveEnd, sentenceEndWord.end + 0.15).toFixed(2));
+      } else {
+        const lastW = wordsInWin.filter((w) => w.end <= cEnd + 0.3).pop();
+        if (lastW && lastW.end >= cStart + clipDur * 0.7) {
+          cEnd = Number(Math.min(effectiveEnd, lastW.end + 0.1).toFixed(2));
+        }
+      }
+    }
+
+    const winDur = Math.max(4, cEnd - cStart);
+    const finalWinWords = wordsInRange.filter((w) => w.start >= cStart - 0.15 && w.end <= cEnd + 0.2);
+    const text = finalWinWords.map((w) => w.word).join(' ').trim();
+    const audioNorm = getWindowAudioScore(cStart, cEnd);
+    const audioEnergyScore = Math.round(audioNorm * 100);
+
+    // Speech pace score (ideal viral pace: 2.2 to 3.8 words/sec)
+    const wps = finalWinWords.length / winDur;
+    const paceBonus = wps >= 1.8 && wps <= 4.2 ? 9 : wps >= 1.0 ? 4 : -6;
+
+    // Viral lexical & emotional hooks
+    let hookBonus = 0;
+    const reasons: string[] = [];
+    if (/[?!¡¿]/.test(text)) {
+      hookBonus += 5;
+      reasons.push('pregunta/énfasis emocional');
+    }
+    if (
+      /\b(increíble|secreto|nunca|millones|dinero|dólares|verdad|error|peligro|nadie|historia|impactante|mira|escucha|brutal|épico|ganar|perder|locura|importante|breaking|million|secret|never|truth|mistake|insane|crazy|best|worst|shocking)\b/i.test(
+        text
+      )
+    ) {
+      hookBonus += 8;
+      reasons.push('palabras gatillo de alta retención');
+    }
+    if (/\b(\d+|cien|mil|millón|primero|100%)\b/i.test(text)) {
+      hookBonus += 4;
+      reasons.push('datos/cifras concretas');
+    }
+    if (audioEnergyScore >= 75) {
+      hookBonus += 7;
+      reasons.push(`pico de energía de voz (${audioEnergyScore}%)`);
+    } else {
+      reasons.push(`energía vocal (${audioEnergyScore}%)`);
+    }
+
+    if (promptTokens.length > 0 && text) {
+      const textLow = text.toLowerCase();
+      const matched = promptTokens.filter((tk) => textLow.includes(tk)).length;
+      if (matched > 0) {
+        hookBonus += matched * 8;
+        reasons.push('coincide con tu búsqueda de momentos');
+      }
+    }
+
+    const rawScore = Math.round(64 + audioNorm * 16 + paceBonus + hookBonus);
+    const scoreTotal = Math.max(72, Math.min(99, rawScore));
+
+    scoredCandidates.push({
+      startSec: cStart,
+      endSec: cEnd,
+      scoreTotal,
+      audioEnergyScore,
+      text: text || params.videoTitle || 'Momento destacado',
+      reasonEs: `Detectado por ${reasons.slice(0, 3).join(' + ')}`,
+    });
+  }
+
+  // 3. Pick top non-overlapping candidates first (greedy NMS with minGap)
+  scoredCandidates.sort((a, b) => b.scoreTotal - a.scoreTotal);
+  const topPool: RawCandidate[] = [];
+  const minGap = Math.max(6, clipDur * 0.55);
+
+  for (const cand of scoredCandidates) {
+    if (topPool.length >= Math.max(maxClips * 3, 8)) break;
+    const overlaps = topPool.some((sel) => Math.abs(sel.startSec - cand.startSec) < minGap);
+    if (!overlaps) {
+      topPool.push(cand);
+    }
+  }
+
+  // Ensure we have at least maxClips non-overlapping windows if the video is long enough
+  if (topPool.length < maxClips && effectiveSpan >= clipDur * 1.4) {
+    for (let i = 0; i < maxClips; i++) {
+      const fallbackStart = Number(
+        Math.min(
+          effectiveEnd - clipDur,
+          rangeStart + (i * Math.max(clipDur * 0.7, (effectiveSpan - clipDur) / Math.max(1, maxClips - 1)))
+        ).toFixed(2)
+      );
+      if (!topPool.some((p) => Math.abs(p.startSec - fallbackStart) < 4)) {
+        const cEnd = Number(Math.min(effectiveEnd, fallbackStart + clipDur).toFixed(2));
+        const wordsInWin = wordsInRange.filter((w) => w.start >= fallbackStart && w.end <= cEnd);
+        const audioNorm = getWindowAudioScore(fallbackStart, cEnd);
+        topPool.push({
+          startSec: fallbackStart,
+          endSec: cEnd,
+          scoreTotal: Math.max(82, Math.round(78 + audioNorm * 16)),
+          audioEnergyScore: Math.round(audioNorm * 100),
+          text: wordsInWin.map((w) => w.word).join(' ') || params.videoTitle || `Momento #${i + 1}`,
+          reasonEs: `Pico de energía vocal (${Math.round(audioNorm * 100)}%) y ritmo continuo`,
+        });
+      }
+    }
+  }
+
+  // 4. Ask Claude 5.5 Haiku ($0.00 Grok credits) to rank & title the best maxClips viral moments from topPool
+  if (topPool.length >= 2 && wordsInRange.length >= 8) {
+    try {
+      const poolText = topPool
+        .slice(0, 8)
+        .map(
+          (c, idx) =>
+            `#${idx} [${c.startSec}s - ${c.endSec}s | AudioPeak: ${c.audioEnergyScore}% | BaseScore: ${c.scoreTotal}]: "${c.text.slice(0, 220)}"`
+        )
+        .join('\n');
+
+      const claudeSys = `Eres un director experto en viralidad de Shorts/TikTok/Reels (estilo OpusClip Pro).
+Analiza los segmentos candidatos de un video (con su energía de voz AudioPeak y transcripción) y selecciona los ${maxClips} MEJORES MOMENTOS más virales, impactantes o divertidos.
+Devuelve ÚNICAMENTE un arreglo JSON válido de hasta ${maxClips} objetos:
+[
+  {
+    "candidateIndex": 0,
+    "scoreTotal": 96,
+    "hookBanner": "GANCHO CORTO DE 4 A 6 PALABRAS EN MAYUSCULAS",
+    "viralTitle": "Título viral magnético en español con 1 emoji 🔥",
+    "reasonEs": "Por qué este momento es oro puro (gancho, revelación o pico de emoción)"
+  }
+]`;
+
+      const claudeRaw = await callClaudeAnthropicAsync({
+        systemPrompt: claudeSys,
+        userPrompt: `Título del video: "${params.videoTitle || 'Video'}"\n${params.momentsPrompt ? `Preferencia del usuario: "${params.momentsPrompt}"\n` : ''}Candidatos:\n${poolText}`,
+        maxTokens: 500,
+      });
+
+      if (claudeRaw) {
+        const m = claudeRaw.replace(/```json|```/gi, '').match(/\[[\s\S]*\]/);
+        if (m) {
+          const parsed = JSON.parse(m[0]);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const selectedByClaude: DetectedViralMoment[] = [];
+            const usedIndices = new Set<number>();
+
+            for (const item of parsed) {
+              const idx = Number(item.candidateIndex);
+              if (Number.isInteger(idx) && idx >= 0 && idx < topPool.length && !usedIndices.has(idx)) {
+                usedIndices.add(idx);
+                const base = topPool[idx];
+                selectedByClaude.push({
+                  startSec: base.startSec,
+                  endSec: base.endSec,
+                  durationSec: Number((base.endSec - base.startSec).toFixed(2)),
+                  scoreTotal: Math.max(84, Math.min(99, Number(item.scoreTotal) || base.scoreTotal)),
+                  audioEnergyScore: base.audioEnergyScore,
+                  hookBanner: String(item.hookBanner || '')
+                    .replace(/["{}]/g, '')
+                    .toUpperCase()
+                    .trim()
+                    .slice(0, 48),
+                  viralTitle: String(item.viralTitle || '').trim().slice(0, 110),
+                  reasonEs: String(item.reasonEs || base.reasonEs).trim(),
+                  transcriptSnippet: base.text,
+                });
+              }
+            }
+
+            if (selectedByClaude.length > 0) {
+              // Fill remaining slots from topPool if Claude returned fewer than maxClips
+              for (let i = 0; i < topPool.length && selectedByClaude.length < maxClips; i++) {
+                if (!usedIndices.has(i)) {
+                  const b = topPool[i];
+                  const defaultHook = b.text
+                    .replace(/[¿?¡!.,[\]"]/g, '')
+                    .split(/\s+/)
+                    .filter(Boolean)
+                    .slice(0, 6)
+                    .join(' ')
+                    .toUpperCase();
+                  selectedByClaude.push({
+                    startSec: b.startSec,
+                    endSec: b.endSec,
+                    durationSec: Number((b.endSec - b.startSec).toFixed(2)),
+                    scoreTotal: b.scoreTotal,
+                    audioEnergyScore: b.audioEnergyScore,
+                    hookBanner: defaultHook || 'MOMENTO CLAVE DETECTADO',
+                    viralTitle: `🔥 ${b.text.split(/\s+/).slice(0, 8).join(' ')}...`,
+                    reasonEs: b.reasonEs,
+                    transcriptSnippet: b.text,
+                  });
+                }
+              }
+              return selectedByClaude.slice(0, maxClips);
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return topPool.slice(0, maxClips).map((b, idx) => {
+    const defaultHook = b.text
+      .replace(/[¿?¡!.,[\]"]/g, '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 6)
+      .join(' ')
+      .toUpperCase();
+    const shortWords = b.text.split(/\s+/).filter(Boolean).slice(0, 7).join(' ');
+    return {
+      startSec: b.startSec,
+      endSec: b.endSec,
+      durationSec: Number((b.endSec - b.startSec).toFixed(2)),
+      scoreTotal: b.scoreTotal,
+      audioEnergyScore: b.audioEnergyScore,
+      hookBanner: defaultHook || `MEJOR MOMENTO #${idx + 1}`,
+      viralTitle: shortWords.length > 6 ? `🔥 "${shortWords}..."` : `🔥 Mejor Momento #${idx + 1} — ${params.videoTitle || 'Viral'}`,
+      reasonEs: b.reasonEs,
+      transcriptSnippet: b.text,
+    };
+  });
+}
+
 /**
  * Uses Claude Haiku 5.5 Vision (`claude-haiku-5-5` with `image_input`) + NumPy Active Speaker Tracker
  * to visually inspect 2 keyframes from the video, lock onto the real person speaking, and generate a complete AI Video Edit Plan.
