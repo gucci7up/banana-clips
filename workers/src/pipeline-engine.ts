@@ -454,10 +454,18 @@ export function buildSrtAndVttFromWords(words: WordTimestamp[], maxWordsPerLine 
   };
 }
 
+export type HookAnimationMode =
+  | 'ELASTIC_POP'
+  | 'SLIDE_IMPACT'
+  | 'KINETIC_WORDS'
+  | 'NEON_PULSE'
+  | 'TYPEWRITER_SWEEP';
+
 export interface AssProOptions {
   autoEmojis?: boolean;
   hookBannerText?: string;
   hookStyle?: 'Classic' | 'Statement' | 'Editorial';
+  hookAnimation?: HookAnimationMode;
   motionGraphics?: boolean;
   captionPresetId?: string;
   brandWatermarkText?: string;
@@ -665,18 +673,20 @@ export function generateAssSubtitles(
   const keywordAccentAss = hexToAssBgr('#00F5D4'); // 3rd color for OpusClip keyword highlighter
   const marginV = Math.round(((100 - styleConfig.positionYPercent) / 100) * playResY);
 
-  const hookFontSize = Math.round(playResX * 0.045);
+  const hookFontSize = Math.round(playResX * 0.046);
+  const hookBadgeFontSize = Math.round(playResX * 0.026);
   const brandFontSize = Math.round(playResX * 0.032);
   const ctaFontSize = Math.round(playResX * 0.038);
 
   // Hook Style variants matching OpusClip's 3 cards: Classic (top white box), Statement (left bold), Editorial (centered serif/italic)
   const hookStyleMode = proOptions?.hookStyle || 'Classic';
-  let hookStyleLine = `Style: HookBanner,DejaVu Sans,${hookFontSize},&H00111318,&H00111318,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,1,0,3,10,0,8,50,50,${Math.round(playResY * 0.09)},1`;
+  let hookStyleLine = `Style: HookBanner,DejaVu Sans,${hookFontSize},&H00111318,&H003BD4FF,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,1,0,3,12,0,8,50,50,${Math.round(playResY * 0.095)},1`;
   if (hookStyleMode === 'Statement') {
-    hookStyleLine = `Style: HookBanner,DejaVu Sans,${Math.round(hookFontSize * 1.1)},&H00FFFFFF,&H003BD4FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,5,3,4,60,60,0,1`;
+    hookStyleLine = `Style: HookBanner,DejaVu Sans,${Math.round(hookFontSize * 1.12)},&H00FFFFFF,&H003BD4FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,6,4,8,60,60,${Math.round(playResY * 0.095)},1`;
   } else if (hookStyleMode === 'Editorial') {
-    hookStyleLine = `Style: HookBanner,DejaVu Serif,${Math.round(hookFontSize * 1.08)},&H003BD4FF,&H00FFFFFF,&H00000000,&H90000000,-1,-1,0,0,100,100,1,0,1,4,3,5,50,50,0,1`;
+    hookStyleLine = `Style: HookBanner,DejaVu Serif,${Math.round(hookFontSize * 1.1)},&H003BD4FF,&H00FFFFFF,&H00000000,&H90000000,-1,-1,0,0,100,100,1,0,1,5,3,8,50,50,${Math.round(playResY * 0.095)},1`;
   }
+  const hookBadgeStyleLine = `Style: HookBadge,DejaVu Sans,${hookBadgeFontSize},&H00111318,&H00FFFFFF,&H003BD4FF,&H003BD4FF,-1,0,0,0,100,100,2,0,3,8,0,8,40,40,${Math.round(playResY * 0.055)},1`;
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -689,6 +699,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,DejaVu Sans,${styleConfig.fontSize},${primaryAss},${activeAss},${outlineAss},&H80000000,-1,0,0,0,100,100,0,0,${styleConfig.backgroundBox ? 3 : 1},${styleConfig.outlineWidth},${styleConfig.shadowDepth},2,40,40,${marginV},1
 ${hookStyleLine}
+${hookBadgeStyleLine}
 Style: BrandWatermark,DejaVu Sans,${brandFontSize},&H30FFFFFF,&H003BD4FF,&H60000000,&H80000000,-1,0,0,0,100,100,1,0,1,2,1,9,30,36,${Math.round(playResY * 0.035)},1
 Style: CtaBanner,DejaVu Sans,${ctaFontSize},&H00FFFFFF,&H003BD4FF,&H00000000,&HD0111318,-1,0,0,0,100,100,1,0,3,4,2,8,50,50,${Math.round(playResY * 0.11)},1
 Style: MotionGraphic,DejaVu Sans,${Math.round(playResX * 0.026)},&H003BD4FF,&H00FFFFFF,&H00111318,&HC0111318,-1,0,0,0,100,100,2,0,3,4,0,2,30,30,${Math.round(playResY * 0.03)},1
@@ -723,15 +734,87 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return { isKeyword: false };
   };
 
-  // 1. Top Viral Hook Banner (First 3.5 seconds)
+  // 1. Animated Viral Auto Hook Banner (First 3.8 seconds) with 5 Kinetic Animation Modes
   if (proOptions?.hookBannerText) {
     const cleanHook = proOptions.hookBannerText
       .replace(/[{}]/g, '')
       .toUpperCase()
-      .slice(0, 48);
+      .trim()
+      .slice(0, 52);
+    const hookWords = cleanHook.split(/\s+/).filter(Boolean);
+    const animMode: HookAnimationMode = proOptions.hookAnimation || 'ELASTIC_POP';
+    const cx = Math.round(playResX / 2);
+    const badgeY = Math.round(playResY * 0.065);
+    const line1Y = Math.round(playResY * 0.115);
+    const line2Y = Math.round(playResY * 0.172);
+    const line3Y = Math.round(playResY * 0.228);
+
+    // Top animated pill badge ("⚡ VIRAL HOOK ⚡")
     events.push(
-      `Dialogue: 2,0:00:00.00,0:00:03.60,HookBanner,,0,0,0,,{\\fad(180,280)} ${cleanHook} `
+      `Dialogue: 3,0:00:00.00,0:00:03.70,HookBadge,,0,0,0,,{\\an8\\pos(${cx},${badgeY})\\fscx0\\fscy0\\t(0,220,\\fscx118\\fscy118)\\t(220,380,\\fscx100\\fscy100)\\t(1400,2000,\\fscx106\\fscy106)\\t(2000,2600,\\fscx100\\fscy100)\\fad(60,280)} ⚡ VIRAL HOOK ⚡ `
     );
+
+    if (animMode === 'KINETIC_WORDS' && hookWords.length >= 2) {
+      // Split into up to 3 staggered kinetic lines that pop in sequentially (0.00s, 0.22s, 0.44s)
+      const third = Math.max(1, Math.ceil(hookWords.length / 3));
+      const p1 = hookWords.slice(0, third).join(' ');
+      const p2 = hookWords.slice(third, third * 2).join(' ');
+      const p3 = hookWords.slice(third * 2).join(' ');
+
+      if (p1) {
+        events.push(
+          `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\move(${cx - 90},${line1Y},${cx},${line1Y},0,220)\\fscx40\\fscy40\\t(0,220,\\fscx118\\fscy118)\\t(220,360,\\fscx100\\fscy100)\\fad(60,260)} ${p1} `
+        );
+      }
+      if (p2) {
+        events.push(
+          `Dialogue: 2,0:00:00.20,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line2Y})\\1c&H003BD4FF&\\3c&H00111318&\\fscx10\\fscy10\\frz-3\\t(0,220,\\fscx126\\fscy126\\frz1)\\t(220,380,\\fscx100\\fscy100\\frz0)\\fad(60,260)} ${p2} `
+        );
+      }
+      if (p3) {
+        events.push(
+          `Dialogue: 2,0:00:00.40,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\move(${cx + 90},${line3Y},${cx},${line3Y},0,220)\\1c&H00D4F500&\\3c&H00111318&\\fscx40\\fscy40\\t(0,220,\\fscx120\\fscy120)\\t(220,360,\\fscx100\\fscy100)\\fad(60,260)} ${p3} `
+        );
+      }
+    } else if (animMode === 'SLIDE_IMPACT') {
+      const mid = Math.ceil(hookWords.length / 2);
+      const topPart = hookWords.slice(0, mid).join(' ');
+      const botPart = hookWords.slice(mid).join(' ');
+      events.push(
+        `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\move(${cx},${Math.round(playResY * 0.02)},${cx},${line1Y},0,240)\\fscx135\\fscy135\\t(0,240,\\fscx94\\fscy94)\\t(240,380,\\fscx100\\fscy100)\\fad(50,280)} ${topPart} `
+      );
+      if (botPart) {
+        events.push(
+          `Dialogue: 2,0:00:00.16,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\move(${cx},${Math.round(playResY * 0.25)},${cx},${line2Y},0,240)\\1c&H003BD4FF&\\3c&H00111318&\\fscx130\\fscy130\\t(0,240,\\fscx100\\fscy100)\\fad(50,280)} ${botPart} `
+        );
+      }
+    } else if (animMode === 'NEON_PULSE') {
+      const mid = Math.ceil(hookWords.length / 2);
+      const topPart = hookWords.slice(0, mid).join(' ');
+      const botPart = hookWords.slice(mid).join(' ');
+      const combined = botPart ? `${topPart}\\N${botPart}` : topPart;
+      events.push(
+        `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line1Y})\\blur14\\fscx130\\fscy130\\t(0,280,\\blur0\\fscx100\\fscy100)\\t(700,1400,\\fscx108\\fscy108\\1c&H003BD4FF&)\\t(1400,2100,\\fscx100\\fscy100\\1c&H00D4F500&)\\t(2100,2900,\\fscx106\\fscy106\\1c&H00FFFFFF&)\\fad(80,280)} ${combined} `
+      );
+    } else if (animMode === 'TYPEWRITER_SWEEP') {
+      const kTagged = hookWords.map((w) => `{\\k22}${w}`).join(' ');
+      events.push(
+        `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line1Y})\\fscx85\\fscy85\\t(0,200,\\fscx104\\fscy104)\\t(200,350,\\fscx100\\fscy100)\\fad(60,260)} ${kTagged} `
+      );
+    } else {
+      // ELASTIC_POP (Default): 2-line elastic spring bounce with dynamic tilt & breathing pulse
+      const mid = Math.ceil(hookWords.length / 2);
+      const topPart = hookWords.slice(0, mid).join(' ');
+      const botPart = hookWords.slice(mid).join(' ');
+      events.push(
+        `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line1Y})\\fscx10\\fscy10\\frz-4\\t(0,210,\\fscx124\\fscy124\\frz2)\\t(210,360,\\fscx100\\fscy100\\frz0)\\t(1200,1900,\\fscx105\\fscy105)\\t(1900,2600,\\fscx100\\fscy100)\\fad(60,260)} ${topPart} `
+      );
+      if (botPart) {
+        events.push(
+          `Dialogue: 2,0:00:00.16,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line2Y})\\1c&H003BD4FF&\\3c&H00111318&\\fscx10\\fscy10\\frz4\\t(0,220,\\fscx128\\fscy128\\frz-1)\\t(220,380,\\fscx100\\fscy100\\frz0)\\t(1300,2000,\\fscx106\\fscy106)\\t(2000,2700,\\fscx100\\fscy100)\\fad(60,260)} ${botPart} `
+        );
+      }
+    }
   }
 
   // 2. Persistent Brand Kit Watermark (@Handle / Brand) - only when explicitly configured

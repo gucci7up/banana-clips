@@ -160,6 +160,9 @@ export default function AiClippingPage() {
   const [hookBanner, setHookBanner] = useState<boolean>(true);
   const [hookType, setHookType] = useState<string>('Headline');
   const [hookStyle, setHookStyle] = useState<'Editorial' | 'Statement' | 'Classic'>('Classic');
+  const [hookAnimation, setHookAnimation] = useState<
+    'ELASTIC_POP' | 'KINETIC_WORDS' | 'SLIDE_IMPACT' | 'NEON_PULSE' | 'TYPEWRITER_SWEEP'
+  >('ELASTIC_POP');
 
   const [motionGraphics, setMotionGraphics] = useState<boolean>(false);
   const [watermarkImagePath, setWatermarkImagePath] = useState<string>('');
@@ -302,6 +305,7 @@ export default function AiClippingPage() {
           subtitleTemplate,
           hookBanner,
           hookStyle,
+          hookAnimation,
           motionGraphics,
           watermarkImagePath: motionGraphics ? watermarkImagePath : '',
           watermarkPosition,
@@ -831,16 +835,16 @@ export default function AiClippingPage() {
                 )}
               </div>
 
-              {/* Auto hook (Beta) + 3 Visual Portrait Cards (Editorial, Statement, Classic) */}
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between">
+              {/* Auto hook (Animated) + 5 Kinetic Motion Modes + 3 Visual Portrait Cards */}
+              <div className="space-y-3.5 pt-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-[#111318]">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#FFD43B] to-[#FFB703] text-[#111318] shadow">
                       <Anchor className="h-4 w-4" />
                     </div>
-                    <span className="text-sm font-bold text-white">Auto hook</span>
-                    <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
-                      Beta
+                    <span className="text-sm font-bold text-white">Auto hook (Animado)</span>
+                    <span className="rounded-full border border-[#FFD43B]/40 bg-[#FFD43B]/15 px-2.5 py-0.5 text-[10px] font-extrabold text-[#FFD43B]">
+                      ⚡ Kinetic 24fps
                     </span>
                   </div>
                   <div className="flex items-center gap-3">
@@ -849,75 +853,156 @@ export default function AiClippingPage() {
                       onChange={(e) => setHookType(e.target.value)}
                       className="bg-transparent text-xs font-semibold text-zinc-300 focus:outline-none"
                     >
-                      <option value="Headline" className="bg-[#18181B]">Headline</option>
-                      <option value="VisualHook" className="bg-[#18181B]">Viral Hook Banner</option>
+                      <option value="Headline" className="bg-[#18181B]">Headline Animado</option>
+                      <option value="VisualHook" className="bg-[#18181B]">Viral Hook Banner + Badge</option>
                     </select>
                     <OpusSwitch checked={hookBanner} onChange={setHookBanner} />
                   </div>
                 </div>
 
                 {hookBanner && (
-                  <div className="flex flex-wrap gap-3">
-                    {[
-                      {
-                        id: 'Editorial',
-                        label: 'Editorial',
-                        bg: 'from-stone-700 via-amber-900/50 to-zinc-900',
-                        renderText: (
-                          <div className="mt-10 text-center font-serif italic">
-                            <div className="text-[10px] text-amber-200">The</div>
-                            <div className="text-sm font-bold text-white">beauty</div>
-                            <div className="text-[9px] text-amber-300">of creation</div>
-                          </div>
-                        ),
-                      },
-                      {
-                        id: 'Statement',
-                        label: 'Statement',
-                        bg: 'from-blue-950 via-indigo-900/60 to-zinc-900',
-                        renderText: (
-                          <div className="mt-10 text-left">
-                            <div className="text-[9px] text-[#FFD43B]">Stop waiting.</div>
-                            <div className="text-xs font-black leading-tight text-white">
-                              Start
-                              <br />
-                              creating.
+                  <div className="space-y-3 rounded-2xl border border-zinc-800/80 bg-[#1B1E25]/60 p-3.5">
+                    {/* 5 Hook Animation Mode Selector Pills */}
+                    <div>
+                      <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                        Estilo de Animación del Hook (Primeros 3.8s del Short)
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { id: 'ELASTIC_POP', label: '⚡ Elastic Pop 3D', desc: 'Rebote elástico + giro dinámico' },
+                          { id: 'KINETIC_WORDS', label: '🔥 Kinetic Words', desc: '3 líneas en cascada (Hormozi)' },
+                          { id: 'SLIDE_IMPACT', label: '💥 Slide + Impact', desc: 'Caída rápida con golpe visual' },
+                          { id: 'NEON_PULSE', label: '✨ Neon Cyber Pulse', desc: 'Desenfoque a brillo neón pulsante' },
+                          { id: 'TYPEWRITER_SWEEP', label: '⌨️ Typewriter Sweep', desc: 'Barrido palabra por palabra' },
+                        ].map((anim) => {
+                          const isAnimSelected = hookAnimation === anim.id;
+                          return (
+                            <button
+                              key={anim.id}
+                              type="button"
+                              onClick={() => setHookAnimation(anim.id as any)}
+                              title={anim.desc}
+                              className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
+                                isAnimSelected
+                                  ? 'border-[#FFD43B] bg-[#FFD43B]/20 text-[#FFD43B] shadow-sm'
+                                  : 'border-zinc-800 bg-[#131720] text-zinc-400 hover:border-zinc-700 hover:text-white'
+                              }`}
+                            >
+                              {anim.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 3 Animated Visual Portrait Cards */}
+                    <div className="flex flex-wrap gap-3.5 pt-1">
+                      {[
+                        {
+                          id: 'Editorial',
+                          label: 'Editorial',
+                          bg: 'from-stone-700 via-amber-900/50 to-zinc-900',
+                          renderText: (
+                            <div
+                              className={`mt-6 text-center font-serif italic ${
+                                hookAnimation === 'SLIDE_IMPACT'
+                                  ? 'animate-hook-slide'
+                                  : hookAnimation === 'NEON_PULSE'
+                                    ? 'animate-hook-neon'
+                                    : 'animate-hook-elastic'
+                              }`}
+                            >
+                              <div className="mb-1 inline-block rounded bg-[#FFD43B] px-1.5 py-0.5 font-sans text-[7px] font-black not-italic text-black">
+                                ⚡ VIRAL HOOK
+                              </div>
+                              <div className="text-[10px] text-amber-200">The</div>
+                              <div className="text-sm font-bold text-white">beauty</div>
+                              <div className="text-[9px] text-amber-300">of creation</div>
                             </div>
-                          </div>
-                        ),
-                      },
-                      {
-                        id: 'Classic',
-                        label: 'Classic',
-                        bg: 'from-sky-900/60 via-zinc-800 to-orange-900/50',
-                        renderText: (
-                          <div className="mb-10 rounded-md bg-white px-1.5 py-1 text-center text-[8px] font-black uppercase leading-tight text-black shadow">
-                            DEFAULT AUTO
-                            <br />
-                            HEADLINE
-                          </div>
-                        ),
-                      },
-                    ].map((card) => {
-                      const active = hookStyle === card.id;
-                      return (
-                        <button
-                          key={card.id}
-                          type="button"
-                          onClick={() => setHookStyle(card.id as any)}
-                          className="flex flex-col items-center space-y-1.5"
-                        >
-                          <div
-                            className={`flex h-32 w-24 flex-col items-center justify-center rounded-2xl border bg-gradient-to-b p-2 transition ${
-                              card.bg
-                            } ${active ? 'border-2 border-white shadow-lg' : 'border-zinc-800 opacity-80 hover:opacity-100'}`}
+                          ),
+                        },
+                        {
+                          id: 'Statement',
+                          label: 'Statement',
+                          bg: 'from-blue-950 via-indigo-900/60 to-zinc-900',
+                          renderText: (
+                            <div
+                              className={`mt-6 text-left ${
+                                hookAnimation === 'SLIDE_IMPACT'
+                                  ? 'animate-hook-slide'
+                                  : hookAnimation === 'NEON_PULSE'
+                                    ? 'animate-hook-neon'
+                                    : 'animate-hook-elastic'
+                              }`}
+                            >
+                              <div className="mb-1 inline-block rounded bg-[#FFD43B] px-1.5 py-0.5 text-[7px] font-black text-black">
+                                ⚡ VIRAL HOOK
+                              </div>
+                              <div className="text-[9px] font-bold text-[#FFD43B]">Stop waiting.</div>
+                              <div className="text-xs font-black leading-tight text-white">
+                                Start
+                                <br />
+                                <span className="text-cyan-300">creating.</span>
+                              </div>
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'Classic',
+                          label: 'Classic',
+                          bg: 'from-sky-900/60 via-zinc-800 to-orange-900/50',
+                          renderText: (
+                            <div
+                              className={`mb-6 flex flex-col items-center gap-1 ${
+                                hookAnimation === 'SLIDE_IMPACT'
+                                  ? 'animate-hook-slide'
+                                  : hookAnimation === 'NEON_PULSE'
+                                    ? 'animate-hook-neon'
+                                    : 'animate-hook-elastic'
+                              }`}
+                            >
+                              <span className="rounded bg-[#FFD43B] px-1.5 py-0.5 text-[7px] font-black text-black shadow">
+                                ⚡ VIRAL HOOK
+                              </span>
+                              <div className="rounded-md bg-white px-2 py-1 text-center text-[8px] font-black uppercase leading-tight text-black shadow-lg">
+                                ANIMATED AUTO
+                                <br />
+                                <span className="text-amber-600">HEADLINE</span>
+                              </div>
+                            </div>
+                          ),
+                        },
+                      ].map((card) => {
+                        const active = hookStyle === card.id;
+                        return (
+                          <button
+                            key={card.id}
+                            type="button"
+                            onClick={() => setHookStyle(card.id as any)}
+                            className="flex flex-col items-center space-y-1.5"
                           >
-                            {card.renderText}
-                          </div>
-                          <span className="text-[11px] font-medium text-zinc-400">{card.label}</span>
-                        </button>
-                      );
-                    })}
+                            <div
+                              className={`flex h-36 w-28 flex-col items-center justify-center overflow-hidden rounded-2xl border bg-gradient-to-b p-2 transition ${
+                                card.bg
+                              } ${
+                                active
+                                  ? 'border-2 border-[#FFD43B] shadow-lg shadow-[#FFD43B]/20'
+                                  : 'border-zinc-800 opacity-80 hover:opacity-100'
+                              }`}
+                            >
+                              {card.renderText}
+                            </div>
+                            <span
+                              className={`text-[11px] font-bold ${
+                                active ? 'text-[#FFD43B]' : 'text-zinc-400'
+                              }`}
+                            >
+                              {card.label}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

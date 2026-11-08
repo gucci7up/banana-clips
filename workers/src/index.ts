@@ -299,6 +299,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
     const autoEmojis: boolean = config.autoEmojis !== false;
     const hookBanner: boolean = config.hookBanner !== false;
     const hookStyle: 'Classic' | 'Statement' | 'Editorial' = config.hookStyle || 'Classic';
+    const hookAnimation: any = config.hookAnimation || 'ELASTIC_POP';
     const motionGraphics: boolean = Boolean(config.motionGraphics);
     const watermarkImagePath: string = config.watermarkImagePath ? String(config.watermarkImagePath) : '';
     const watermarkPosition: WatermarkPosition =
@@ -778,6 +779,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         autoEmojis,
         hookBannerText: hookBanner ? cleanHeadline : undefined,
         hookStyle,
+        hookAnimation,
         motionGraphics,
         captionPresetId,
         brandWatermarkText: brandWatermarkText.trim() || undefined,

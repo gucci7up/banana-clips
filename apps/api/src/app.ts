@@ -1775,8 +1775,17 @@ export async function createBananaApiApp(): Promise<Express> {
         const thumbFileAbs = path.join(storageRoot, thumbFileRel);
         const assPath = path.join(storageRoot, 'banana-clips', `live_subs_${clipId}.ass`);
 
+        const liveHookHeadline = (bestSummary || finalWords.map((w) => w.word).join(' '))
+          .replace(/[¿?¡!.,[\]"]/g, '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 6)
+          .join(' ');
         const assContent = generateAssSubtitles(finalWords, SUBTITLE_TEMPLATES.Bold, 1080, 1920, {
           autoEmojis: true,
+          hookBannerText: liveHookHeadline || params.sessionTitle,
+          hookStyle: 'Classic',
+          hookAnimation: 'ELASTIC_POP',
           clipDurationSec: clipDur,
         });
         fs.writeFileSync(assPath, assContent, 'utf-8');

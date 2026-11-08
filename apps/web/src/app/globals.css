@@ -62,3 +62,35 @@ body {
     @apply hover:border-[#FFD43B]/40 hover:shadow-[#FFD43B]/5 hover:shadow-xl;
   }
 }
+
+@keyframes hookElasticPop {
+  0% { transform: scale(0.4) rotate(-4deg); opacity: 0; }
+  35% { transform: scale(1.16) rotate(2deg); opacity: 1; }
+  55% { transform: scale(0.97) rotate(0deg); }
+  75% { transform: scale(1.04) rotate(0deg); }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+@keyframes hookSlideImpact {
+  0% { transform: translateY(-22px) scale(1.25); opacity: 0; }
+  30% { transform: translateY(3px) scale(0.94); opacity: 1; }
+  45% { transform: translateY(-2px) scale(1.03); }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes hookNeonPulse {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(255, 212, 59, 0.85)); transform: scale(1); }
+  50% { filter: drop-shadow(0 0 14px rgba(0, 245, 212, 0.95)); transform: scale(1.07); }
+}
+
+.animate-hook-elastic {
+  animation: hookElasticPop 2.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
+.animate-hook-slide {
+  animation: hookSlideImpact 2.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.animate-hook-neon {
+  animation: hookNeonPulse 1.8s ease-in-out infinite;
+}
