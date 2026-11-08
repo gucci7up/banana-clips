@@ -247,22 +247,21 @@ function drawCyanideCliffBackground(
   ctx.lineTo(570, 28);
   ctx.lineTo(625, 55);
   ctx.lineTo(750, 95);
-  ctx.lineTo(980, 130);
-  ctx.lineTo(1180, 148);
-  ctx.lineTo(1450, 120);
+  ctx.lineTo(915, 130);
   if (showFullCliffWall) {
     // Full right-side cliff rock wall extending deep down (as seen in wide shot frame_09.jpg)
-    ctx.lineTo(1450, 2900);
-    ctx.lineTo(1180, 2900);
-    ctx.lineTo(1120, 2400);
-    ctx.lineTo(1060, 1950);
-    ctx.lineTo(1080, 1450);
-    ctx.lineTo(1010, 980);
-    ctx.lineTo(1025, 580);
-    ctx.lineTo(950, 360);
     ctx.lineTo(960, 185);
-    ctx.lineTo(915, 130);
+    ctx.lineTo(950, 360);
+    ctx.lineTo(1025, 580);
+    ctx.lineTo(1010, 980);
+    ctx.lineTo(1080, 1450);
+    ctx.lineTo(1060, 1950);
+    ctx.lineTo(1120, 2400);
+    ctx.lineTo(1650, 2400);
+    ctx.lineTo(1650, -80);
   } else {
+    ctx.lineTo(1180, 148);
+    ctx.lineTo(1450, 120);
     ctx.lineTo(1450, -80);
   }
   ctx.closePath();
@@ -899,13 +898,13 @@ function renderCyanideExplosmFrame(
     // Matches frame_07.jpg & motion_grid_45s.jpg: Whip-pan down to the Upside-Down Grand Piano + Pianist!
     const panP = easeInOutQuad(Math.min(1, u * 2.0));
     camX = -55;
-    camY = lerp(320, 890, panP);
-    camZoom = 1.15;
+    camY = lerp(750, 985, panP);
+    camZoom = 1.12;
   } else if (act === 'CYANIDE_COUPLE_GLASSES' || scene.sceneNumber === 5) {
     // Matches frame_14.jpg: Whip-pan further down to Glasses Lady + Plaid Shirt Glasses Guy!
     const panP = easeInOutQuad(Math.min(1, u * 2.0));
     camX = -45;
-    camY = lerp(890, 1520, panP);
+    camY = lerp(1380, 1520, panP);
     camZoom = 1.28;
   } else if (act === 'CYANIDE_WIDE_TOWER_ZOOM' || scene.sceneNumber >= 6) {
     // Matches frame_09.jpg: Dramatic wide zoom-out revealing the entire cliff wall + all characters + Grand Piano!
