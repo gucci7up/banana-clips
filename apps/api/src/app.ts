@@ -1566,6 +1566,7 @@ export async function createBananaApiApp(): Promise<Express> {
     {
       currentStatusText: string;
       cutsCount: number;
+      blocksScanned: number;
       isCapturing: boolean;
       autoCutEnabled: boolean;
       clipDurationSec: number;
@@ -1582,23 +1583,24 @@ export async function createBananaApiApp(): Promise<Express> {
     clipDurationSec: number;
   }) => {
     const rt = liveSessionStatusMap.get(params.videoId) || {
-      currentStatusText: 'Iniciando detector de mejores momentos cada 10 minutos...',
+      currentStatusText: 'Iniciando detector multi-highlight en vivo...',
       cutsCount: 0,
+      blocksScanned: 0,
       isCapturing: false,
       autoCutEnabled: true,
       clipDurationSec: params.clipDurationSec,
-      intervalSec: 600,
+      intervalSec: 300,
     };
     if (rt.isCapturing) return null;
     rt.isCapturing = true;
-    const cutNum = rt.cutsCount + 1;
+    const blockIdx = rt.blocksScanned;
     const targetDur = Math.max(10, Math.min(45, Number(params.clipDurationSec) || 20));
-    const analysisWindowSec = Math.max(45, Math.min(90, Math.round(targetDur * 2.5)));
-    const blockSec = Math.max(60, Number(rt.intervalSec) || 600);
-    const blockStartMin = Math.floor(((cutNum - 1) * blockSec) / 60);
-    const blockEndMin = Math.floor((cutNum * blockSec) / 60);
+    const analysisWindowSec = Math.max(75, Math.min(120, Math.round(targetDur * 4.5)));
+    const blockSec = Math.max(60, Number(rt.intervalSec) || 300);
+    const blockStartMin = Math.floor((blockIdx * blockSec) / 60);
+    const blockEndMin = Math.floor(((blockIdx + 1) * blockSec) / 60);
 
-    rt.currentStatusText = `Escaneando Bloque #${cutNum} [Min ${blockStartMin}:00 - ${blockEndMin}:00] para extraer el Mejor Corte (${targetDur}s)...`;
+    rt.currentStatusText = `Escaneando Bloque #${blockIdx + 1} [Min ${blockStartMin}:00 - ${blockEndMin}:00] para detectar TODOS los Mejores Momentos...`;
     liveSessionStatusMap.set(params.videoId, rt);
 
     try {
@@ -1608,14 +1610,14 @@ export async function createBananaApiApp(): Promise<Express> {
         streamUrl: params.streamUrl,
         outputMp4Path: rawSegPath,
         durationSec: analysisWindowSec,
-        segmentIndex: rt.cutsCount,
+        segmentIndex: blockIdx,
         blockDurationSec: blockSec,
         onStatus: (msg) => {
           rt.currentStatusText = msg;
         },
       });
 
-      rt.currentStatusText = `Analizando audio y discurso con Faster-Whisper IA para localizar el pico viral #${cutNum}...`;
+      rt.currentStatusText = `Analizando discurso del Bloque [Min ${blockStartMin}-${blockEndMin}] con Faster-Whisper IA para extraer múltiples Highlights...`;
       const whisperSegments = await transcribeVideoWithFasterWhisperAsync(rawSegPath);
 
       const allWords: any[] = [];
@@ -1625,142 +1627,180 @@ export async function createBananaApiApp(): Promise<Express> {
         }
       }
 
-      // Find the highest-impact viral window of length `targetDur` inside `analysisWindowSec`
       const totalAvailableSec = Math.max(targetDur, segMeta.durationSeconds || analysisWindowSec);
-      let bestStartSec = 0;
-      let bestScore = 86;
-      let bestSummary = '';
+      interface HighlightCandidate {
+        startSec: number;
+        score: number;
+        summary: string;
+      }
+      const candidates: HighlightCandidate[] = [];
 
       if (whisperSegments.length > 0) {
-        let topCandidateScore = -1;
         for (const seg of whisperSegments) {
           const candStart = Math.max(0, Math.min(totalAvailableSec - targetDur, seg.startSec));
           const candEnd = candStart + targetDur;
           const wordsInWindow = allWords.filter((w) => w.start >= candStart && w.end <= candEnd + 0.5);
+          if (wordsInWindow.length < 4) continue;
           const textInWindow = wordsInWindow.map((w) => w.word).join(' ');
           const wordDensity = wordsInWindow.length / Math.max(1, targetDur);
-          const hookBonus = /[?!¡¿]|\b(important|increíble|mira|ahora|nunca|millones|ganar|historia|verdad|breaking|trump|world|live|urgent)\b/i.test(
+          const hookBonus = /[?!¡¿]|\b(important|increíble|mira|ahora|nunca|millones|ganar|historia|verdad|breaking|trump|world|live|urgent|never|think|great|money|people|country|war|peace|deal)\b/i.test(
             textInWindow
           )
             ? 12
-            : 4;
+            : 5;
           const score = Math.min(99, Math.round(74 + wordDensity * 6.5 + hookBonus));
-          if (score > topCandidateScore && wordsInWindow.length >= 3) {
-            topCandidateScore = score;
-            bestStartSec = Number(candStart.toFixed(2));
-            bestScore = score;
-            bestSummary = textInWindow;
-          }
+          candidates.push({
+            startSec: Number(candStart.toFixed(2)),
+            score,
+            summary: textInWindow,
+          });
         }
       }
 
-      const clipDur = Math.max(8, Math.min(targetDur, Math.round(totalAvailableSec - bestStartSec)));
-      const shiftedWords = allWords
-        .filter((w) => w.start >= bestStartSec - 0.2 && w.end <= bestStartSec + clipDur + 0.5)
-        .map((w) => ({
-          word: String(w.word || '').trim(),
-          start: Number(Math.max(0, w.start - bestStartSec).toFixed(2)),
-          end: Number(Math.min(clipDur, Math.max(0.25, w.end - bestStartSec)).toFixed(2)),
-          confidence: 0.98,
-          speaker: 'Live',
-          isFiller: false,
-        }))
-        .filter((w) => w.word.length > 0);
+      // Sort by highest viral score first and pick up to 3 non-overlapping highlights in this block!
+      candidates.sort((a, b) => b.score - a.score);
+      const selectedHighlights: HighlightCandidate[] = [];
+      const minGapSec = Math.max(12, targetDur * 0.85);
 
-      const finalWords =
-        shiftedWords.length > 0
-          ? shiftedWords
-          : [
-              { word: '🔥', start: 0.2, end: 0.8, confidence: 0.98, speaker: 'Live', isFiller: false },
-              { word: 'Mejor', start: 0.8, end: 1.4, confidence: 0.98, speaker: 'Live', isFiller: false },
-              { word: 'Momento', start: 1.4, end: 2.2, confidence: 0.98, speaker: 'Live', isFiller: false },
-              { word: `#${cutNum}`, start: 2.2, end: 3.0, confidence: 0.98, speaker: 'Live', isFiller: false },
-            ];
+      for (const cand of candidates) {
+        if (selectedHighlights.length >= 3) break;
+        const overlaps = selectedHighlights.some((sel) => Math.abs(sel.startSec - cand.startSec) < minGapSec);
+        if (!overlaps && (cand.score >= 80 || selectedHighlights.length === 0)) {
+          selectedHighlights.push(cand);
+        }
+      }
 
-      rt.currentStatusText = `¡Mejor Momento detectado (Score ${bestScore}/100 en ${bestStartSec}s)! Renderizando Short 9:16...`;
-      const clipId = crypto.randomUUID();
-      const clipFileRel = `banana-clips/live_clip_${clipId}.mp4`;
-      const clipFileAbs = path.join(storageRoot, clipFileRel);
-      const thumbFileRel = `banana-thumbnails/live_clip_${clipId}.jpg`;
-      const thumbFileAbs = path.join(storageRoot, thumbFileRel);
-      const assPath = path.join(storageRoot, 'banana-clips', `live_subs_${clipId}.ass`);
+      if (selectedHighlights.length === 0) {
+        // Fallback if stream has no speech in this window: still extract 2 distinct moments if long enough
+        selectedHighlights.push({ startSec: 0, score: 88, summary: '' });
+        if (totalAvailableSec >= targetDur * 2.1) {
+          selectedHighlights.push({ startSec: Number(targetDur.toFixed(2)), score: 85, summary: '' });
+        }
+      }
 
-      const assContent = generateAssSubtitles(finalWords, SUBTITLE_TEMPLATES.Bold, 1080, 1920, {
-        autoEmojis: true,
-        clipDurationSec: clipDur,
-      });
-      fs.writeFileSync(assPath, assContent, 'utf-8');
+      // Order selected highlights chronologically inside the block
+      selectedHighlights.sort((a, b) => a.startSec - b.startSec);
 
-      renderClipWithFfmpeg({
-        sourceVideoPath: rawSegPath,
-        outputVideoPath: clipFileAbs,
-        startSec: bestStartSec,
-        durationSec: clipDur,
-        aspectRatio: '9:16',
-        resolution: '1080p',
-        reframeMode: 'LEVEL_2_VISUAL_TRACKING',
-        subtitleAssPath: assPath,
-        autoZoom: true,
-        autoColorCorrection: true,
-        audioEnhancer: true,
-      });
+      const createdClipIds: string[] = [];
 
-      generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(2.0, clipDur / 3));
+      for (let hIdx = 0; hIdx < selectedHighlights.length; hIdx++) {
+        const hl = selectedHighlights[hIdx];
+        const cutNum = rt.cutsCount + 1;
+        const bestStartSec = hl.startSec;
+        const bestScore = hl.score;
+        const bestSummary = hl.summary;
 
-      const storageObjId = crypto.randomUUID();
-      const statSize = fs.existsSync(clipFileAbs) ? fs.statSync(clipFileAbs).size : 0;
-      await db.query(
-        `INSERT INTO "StorageObject" ("id", "userId", "bucket", "objectKey", "localPath", "mimeType", "sizeBytes")
-         VALUES ($1, $2, 'banana-clips', $3, $4, 'video/mp4', $5)`,
-        [storageObjId, params.userId, `live_clip_${clipId}.mp4`, clipFileAbs, statSize]
-      );
+        const clipDur = Math.max(8, Math.min(targetDur, Math.round(totalAvailableSec - bestStartSec)));
+        const shiftedWords = allWords
+          .filter((w) => w.start >= bestStartSec - 0.2 && w.end <= bestStartSec + clipDur + 0.5)
+          .map((w) => ({
+            word: String(w.word || '').trim(),
+            start: Number(Math.max(0, w.start - bestStartSec).toFixed(2)),
+            end: Number(Math.min(clipDur, Math.max(0.25, w.end - bestStartSec)).toFixed(2)),
+            confidence: 0.98,
+            speaker: 'Live',
+            isFiller: false,
+          }))
+          .filter((w) => w.word.length > 0);
 
-      const transcriptPreview = (bestSummary || finalWords.map((w) => w.word).join(' ')).slice(0, 220);
-      const firstWordsTitle = transcriptPreview.split(/\s+/).slice(0, 7).join(' ');
-      const clipTitle =
-        firstWordsTitle.length > 8
-          ? `🔥 Mejor Corte [Min ${blockStartMin}-${blockEndMin}]: "${firstWordsTitle}..."`
-          : `🔥 Mejor Corte [Min ${blockStartMin}-${blockEndMin}] — ${params.sessionTitle}`;
+        const finalWords =
+          shiftedWords.length > 0
+            ? shiftedWords
+            : [
+                { word: '🔥', start: 0.2, end: 0.8, confidence: 0.98, speaker: 'Live', isFiller: false },
+                { word: 'Mejor', start: 0.8, end: 1.4, confidence: 0.98, speaker: 'Live', isFiller: false },
+                { word: 'Momento', start: 1.4, end: 2.2, confidence: 0.98, speaker: 'Live', isFiller: false },
+                { word: `#${cutNum}`, start: 2.2, end: 3.0, confidence: 0.98, speaker: 'Live', isFiller: false },
+              ];
 
-      await db.query(
-        `INSERT INTO "Clip" ("id", "userId", "videoId", "title", "altTitle", "description", "hashtags", "keywords", "summary", "category", "language", "startSec", "endSec", "durationSec", "aspectRatio", "reframeMode", "storageObjectId", "previewPath", "thumbnailPath", "fingerprintHash")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'LIVE_CUT', 'es', $10, $11, $12, '9:16', 'LEVEL_2_VISUAL_TRACKING', $13, $14, $15, $16)`,
-        [
-          clipId,
-          params.userId,
-          params.videoId,
-          clipTitle,
-          clipTitle,
-          `Mejor momento detectado en el directo (${params.streamUrl})\n\nTranscripción: "${transcriptPreview}"`,
-          JSON.stringify(['#highlight', '#live', '#shorts', '#bananaclips']),
-          JSON.stringify(['highlight', 'live', 'mejor momento']),
-          transcriptPreview,
-          bestStartSec,
-          bestStartSec + clipDur,
-          clipDur,
-          storageObjId,
-          clipFileRel,
-          thumbFileRel,
-          crypto.createHash('md5').update(`${clipId}:${cutNum}`).digest('hex'),
-        ]
-      );
+        rt.currentStatusText = `Renderizando Mejor Momento ${hIdx + 1}/${selectedHighlights.length} del Bloque [Min ${blockStartMin}-${blockEndMin}] (Score ${bestScore}/100)...`;
+        const clipId = crypto.randomUUID();
+        const clipFileRel = `banana-clips/live_clip_${clipId}.mp4`;
+        const clipFileAbs = path.join(storageRoot, clipFileRel);
+        const thumbFileRel = `banana-thumbnails/live_clip_${clipId}.jpg`;
+        const thumbFileAbs = path.join(storageRoot, thumbFileRel);
+        const assPath = path.join(storageRoot, 'banana-clips', `live_subs_${clipId}.ass`);
 
-      await db.query(
-        `INSERT INTO "ClipScore" ("id", "clipId", "scoreTotal", "scoreHook", "scoreStory", "scoreEmotion", "scoreEngagement", "scoreClarity", "scoreVisual", "scoreShareability", "explanation", "algorithmVersion", "weightsUsed")
-         VALUES ($1, $2, $3, 95, 92, 94, 95, 92, 93, 94, $4, 'v2.5-live-highlight-hunter', '{}')`,
-        [
-          crypto.randomUUID(),
-          clipId,
-          bestScore,
-          `Mejor Momento #${cutNum} (Score ${bestScore}/100, extraído en el segundo ${bestStartSec}s de la ventana de análisis). "${transcriptPreview}"`,
-        ]
-      );
+        const assContent = generateAssSubtitles(finalWords, SUBTITLE_TEMPLATES.Bold, 1080, 1920, {
+          autoEmojis: true,
+          clipDurationSec: clipDur,
+        });
+        fs.writeFileSync(assPath, assContent, 'utf-8');
 
-      rt.cutsCount = cutNum;
+        renderClipWithFfmpeg({
+          sourceVideoPath: rawSegPath,
+          outputVideoPath: clipFileAbs,
+          startSec: bestStartSec,
+          durationSec: clipDur,
+          aspectRatio: '9:16',
+          resolution: '1080p',
+          reframeMode: 'LEVEL_2_VISUAL_TRACKING',
+          subtitleAssPath: assPath,
+          autoZoom: true,
+          autoColorCorrection: true,
+          audioEnhancer: true,
+        });
+
+        generateThumbnailFfmpeg(clipFileAbs, thumbFileAbs, Math.min(2.0, clipDur / 3));
+
+        const storageObjId = crypto.randomUUID();
+        const statSize = fs.existsSync(clipFileAbs) ? fs.statSync(clipFileAbs).size : 0;
+        await db.query(
+          `INSERT INTO "StorageObject" ("id", "userId", "bucket", "objectKey", "localPath", "mimeType", "sizeBytes")
+           VALUES ($1, $2, 'banana-clips', $3, $4, 'video/mp4', $5)`,
+          [storageObjId, params.userId, `live_clip_${clipId}.mp4`, clipFileAbs, statSize]
+        );
+
+        const transcriptPreview = (bestSummary || finalWords.map((w) => w.word).join(' ')).slice(0, 220);
+        const firstWordsTitle = transcriptPreview.split(/\s+/).slice(0, 7).join(' ');
+        const clipTitle =
+          firstWordsTitle.length > 8
+            ? `🔥 Highlight #${cutNum} [Min ${blockStartMin}-${blockEndMin}]: "${firstWordsTitle}..."`
+            : `🔥 Mejor Corte #${cutNum} [Min ${blockStartMin}-${blockEndMin}] — ${params.sessionTitle}`;
+
+        await db.query(
+          `INSERT INTO "Clip" ("id", "userId", "videoId", "title", "altTitle", "description", "hashtags", "keywords", "summary", "category", "language", "startSec", "endSec", "durationSec", "aspectRatio", "reframeMode", "storageObjectId", "previewPath", "thumbnailPath", "fingerprintHash")
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'LIVE_CUT', 'es', $10, $11, $12, '9:16', 'LEVEL_2_VISUAL_TRACKING', $13, $14, $15, $16)`,
+          [
+            clipId,
+            params.userId,
+            params.videoId,
+            clipTitle,
+            clipTitle,
+            `Mejor momento #${cutNum} detectado en el directo (${params.streamUrl})\n\nTranscripción: "${transcriptPreview}"`,
+            JSON.stringify(['#highlight', '#live', '#shorts', '#bananaclips']),
+            JSON.stringify(['highlight', 'live', 'mejor momento']),
+            transcriptPreview,
+            bestStartSec,
+            bestStartSec + clipDur,
+            clipDur,
+            storageObjId,
+            clipFileRel,
+            thumbFileRel,
+            crypto.createHash('md5').update(`${clipId}:${cutNum}`).digest('hex'),
+          ]
+        );
+
+        await db.query(
+          `INSERT INTO "ClipScore" ("id", "clipId", "scoreTotal", "scoreHook", "scoreStory", "scoreEmotion", "scoreEngagement", "scoreClarity", "scoreVisual", "scoreShareability", "explanation", "algorithmVersion", "weightsUsed")
+           VALUES ($1, $2, $3, 95, 92, 94, 95, 92, 93, 94, $4, 'v2.5-live-highlight-hunter', '{}')`,
+          [
+            crypto.randomUUID(),
+            clipId,
+            bestScore,
+            `Highlight #${cutNum} (Score ${bestScore}/100, extraído en el bloque [Min ${blockStartMin}-${blockEndMin}]). "${transcriptPreview}"`,
+          ]
+        );
+
+        rt.cutsCount = cutNum;
+        createdClipIds.push(clipId);
+      }
+
+      rt.blocksScanned = blockIdx + 1;
       rt.isCapturing = false;
-      rt.currentStatusText = `✅ Mejor Momento #${cutNum} (Score ${bestScore}/100 • ${clipDur}s) extraído y guardado en Mi Biblioteca.`;
+      rt.currentStatusText = `✅ ${selectedHighlights.length} Mejores Momentos extraídos del Bloque [Min ${blockStartMin}-${blockEndMin}] (${rt.cutsCount} cortes totales en galería). Pasando al siguiente bloque...`;
       liveSessionStatusMap.set(params.videoId, rt);
-      return clipId;
+      return createdClipIds[0] || null;
     } catch (err: any) {
       rt.isCapturing = false;
       rt.currentStatusText = `⚠️ Reintentando análisis en directo: ${err?.message || 'stream ocupado'}`;
@@ -1859,15 +1899,16 @@ export async function createBananaApiApp(): Promise<Express> {
       const userId = req.user!.sub;
 
       liveSessionStatusMap.set(newVideoId, {
-        currentStatusText: 'Conectando con el directo y preparando el Corte #1...',
+        currentStatusText: 'Conectando con el directo y escaneando Mejores Momentos del Bloque #1...',
         cutsCount: 0,
+        blocksScanned: 0,
         isCapturing: false,
         autoCutEnabled: Boolean(autoCutEnabled),
         clipDurationSec: dur,
         intervalSec: iv,
       });
 
-      // Immediately trigger Cut #1 in background, and schedule periodic cuts if autoCutEnabled
+      // Immediately scan Block #1 (extracting up to 3 top highlights) and continuously scan subsequent blocks
       setImmediate(async () => {
         await captureAndRenderLiveCutAsync({
           videoId: newVideoId,
@@ -1888,7 +1929,9 @@ export async function createBananaApiApp(): Promise<Express> {
               return;
             }
             const rt = liveSessionStatusMap.get(newVideoId);
-            if (rt && rt.cutsCount >= 12) {
+            if (rt && rt.isCapturing) return;
+            if (rt && rt.cutsCount >= 15) {
+              rt.currentStatusText = `✅ Escaneo completo: ${rt.cutsCount} Mejores Momentos extraídos y guardados en Mi Biblioteca.`;
               clearInterval(timer);
               return;
             }
@@ -1899,7 +1942,7 @@ export async function createBananaApiApp(): Promise<Express> {
               sessionTitle: String(title),
               clipDurationSec: dur,
             });
-          }, iv * 1000);
+          }, 10000);
 
           const cur = liveSessionStatusMap.get(newVideoId);
           if (cur) cur.timer = timer;

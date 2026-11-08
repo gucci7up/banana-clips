@@ -243,7 +243,7 @@ export async function captureLiveStreamSegmentAsync(params: {
   onStatus?: (msg: string) => void;
 }): Promise<MediaProbeResult> {
   fs.mkdirSync(path.dirname(params.outputMp4Path), { recursive: true });
-  const dur = Math.max(8, Math.min(90, Number(params.durationSec) || 60));
+  const dur = Math.max(8, Math.min(130, Number(params.durationSec) || 90));
   const segIdx = Math.max(0, Number(params.segmentIndex) || 0);
   const blockSec = Math.max(60, Number(params.blockDurationSec) || 600); // Default: 600s = 10-minute blocks!
   const blockStartMin = Math.floor((segIdx * blockSec) / 60);

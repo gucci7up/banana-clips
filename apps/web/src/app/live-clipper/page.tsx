@@ -195,10 +195,10 @@ export default function LiveClipperPage() {
                 }}
                 className="mt-1 w-full rounded-xl border border-slate-700 bg-[#111318] p-2.5 text-xs font-bold text-white"
               >
-                <option value="600">⭐ 1 Mejor Corte cada 10 Minutos (Recomendado)</option>
-                <option value="300">1 Mejor Corte cada 5 Minutos</option>
-                <option value="900">1 Mejor Corte cada 15 Minutos</option>
-                <option value="60">Modo Rápido: 1 Mejor Corte cada 1 Minuto</option>
+                <option value="600">⭐ Bloques de 10 Minutos (Saca de 2 a 3 Mejores Cortes c/10m)</option>
+                <option value="300">Bloques de 5 Minutos (Saca de 2 a 3 Mejores Cortes c/5m)</option>
+                <option value="900">Bloques de 15 Minutos (Saca de 2 a 3 Mejores Cortes c/15m)</option>
+                <option value="60">Modo Rápido: Bloques de 1 Minuto</option>
                 <option value="MANUAL">Solo Manual al pulsar el botón</option>
               </select>
             </div>
@@ -229,7 +229,7 @@ export default function LiveClipperPage() {
             disabled={!activeVideoId}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#FFD43B] px-4 py-3 text-xs font-black text-[#111318] shadow hover:brightness-105 disabled:opacity-40"
           >
-            <Zap className="h-4 w-4" /> ⚡ Analizar Siguiente Bloque de 10 Min y Sacar Mejor Corte ({clipDurationSec}s)
+            <Zap className="h-4 w-4" /> ⚡ Escanear Siguiente Bloque y Sacar Mejores Cortes ({clipDurationSec}s c/u)
           </button>
 
           {/* Live Worker Real-time Status Box */}
