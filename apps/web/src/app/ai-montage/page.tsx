@@ -32,6 +32,8 @@ interface StorySceneSpec {
   title: string;
   visualPrompt: string;
   narrationText: string;
+  actionType?: string;
+  propType?: string;
   cameraMotion: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN_RIGHT' | 'PAN_LEFT' | 'PUNCH_SHAKE';
   sfxType: 'EFFORT' | 'KNOCK' | 'CLANG' | 'EXPLOSION' | 'DOOR_CREAK' | 'LAUGH';
   durationSec: number;
@@ -88,8 +90,8 @@ export default function AiMontagePage() {
   const [sceneCount, setSceneCount] = useState<number>(6);
   const [totalDurationSec, setTotalDurationSec] = useState<number>(60);
   const [seed, setSeed] = useState<number>(42);
-  const [voiceName, setVoiceName] = useState('es-MX-JorgeNeural');
-  const [burnSubtitles, setBurnSubtitles] = useState(true);
+  const [voiceName, setVoiceName] = useState('NONE');
+  const [burnSubtitles, setBurnSubtitles] = useState(false);
   const [nvidiaApiKey, setNvidiaApiKey] = useState(
     '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'
   );
@@ -387,13 +389,17 @@ export default function AiMontagePage() {
                   </label>
                   <select
                     value={voiceName}
-                    onChange={(e) => setVoiceName(e.target.value)}
+                    onChange={(e) => {
+                      setVoiceName(e.target.value);
+                      setBurnSubtitles(e.target.value !== 'NONE');
+                    }}
                     className="w-full rounded-xl border border-zinc-700 bg-[#0E1015] px-3 py-2 text-xs font-semibold text-white"
                   >
-                    <option value="es-MX-JorgeNeural">Español (Jorge - Dinámico)</option>
-                    <option value="es-ES-AlvaroNeural">Español (Álvaro - Narrador)</option>
-                    <option value="es-MX-DaliaNeural">Español (Dalia - Expresiva)</option>
-                    <option value="en-US-ChristopherNeural">Inglés (Christopher - Story)</option>
+                    <option value="NONE">🔇 Sin Voz (Comedia Física + SFX 24fps)</option>
+                    <option value="es-MX-JorgeNeural">🎙️ Español (Jorge + Subtítulos)</option>
+                    <option value="es-ES-AlvaroNeural">🎙️ Español (Álvaro + Subtítulos)</option>
+                    <option value="es-MX-DaliaNeural">🎙️ Español (Dalia + Subtítulos)</option>
+                    <option value="en-US-ChristopherNeural">🎙️ Inglés (Christopher + Subtítulos)</option>
                   </select>
                 </div>
 
@@ -533,17 +539,22 @@ export default function AiMontagePage() {
                         />
                       </div>
 
-                      <div className="flex items-center gap-2 text-[11px]">
+                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
                         <select
-                          value={sc.cameraMotion}
-                          onChange={(e) => updateSceneField(idx, 'cameraMotion', e.target.value)}
-                          className="rounded-lg border border-zinc-800 bg-[#16181F] px-2 py-1 text-[11px] font-semibold text-amber-300"
+                          value={sc.actionType || 'WALK_CONFIDENT'}
+                          onChange={(e) => updateSceneField(idx, 'actionType', e.target.value)}
+                          className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-bold text-emerald-300"
                         >
-                          <option value="ZOOM_IN">Cámara: Zoom In</option>
-                          <option value="PUNCH_SHAKE">Cámara: Shake Cómico</option>
-                          <option value="ZOOM_OUT">Cámara: Zoom Out</option>
-                          <option value="PAN_RIGHT">Cámara: Paneo Derecha</option>
-                          <option value="PAN_LEFT">Cámara: Paneo Izquierda</option>
+                          <option value="WALK_CONFIDENT">🏃‍♂️ Acción 24fps: Camina Confiado y Agarra Pomo</option>
+                          <option value="PULL_HANDLE_HARD">💪 Acción 24fps: Jala con Ambas Manos Sudando</option>
+                          <option value="BRACE_FOOT_AND_FALL">🦶 Acción 24fps: Apoya Pie en Puerta y Cae al Piso</option>
+                          <option value="CROWBAR_PRY_SPARKS">🔧 Acción 24fps: Usa Palanca con Chispas</option>
+                          <option value="FLYING_KICK_BOUNCE">🥋 Acción 24fps: Patada Voladora y Rebote</option>
+                          <option value="THINK_LIGHTBULB_IDEA">💡 Acción 24fps: Piensa en el Piso y Sale Bombillo</option>
+                          <option value="PUSH_OPEN_AND_EXIT">🚪 Acción 24fps: Empuja Puerta Suave y Sale</option>
+                          <option value="SWAT_MOSQUITO_CHAOS">🦟 Acción 24fps: Manotazos Locos (Mosquito)</option>
+                          <option value="SPIDER_PANIC_BROOM">🕷️ Acción 24fps: Pánico con Escoba (Araña)</option>
+                          <option value="GYM_HEAVY_BARBELL">🏋️‍♂️ Acción 24fps: Esfuerzo Pesa 500kg (Gimnasio)</option>
                         </select>
 
                         <span className="rounded-lg bg-zinc-800 px-2.5 py-1 font-bold text-zinc-300">

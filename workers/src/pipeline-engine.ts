@@ -12,6 +12,11 @@ import type {
   SubtitleStyleConfig,
   WordTimestamp,
 } from '@banana/video-types';
+import {
+  renderAnimatedStickmanSceneToMp4Async,
+  type StickmanActionType,
+  type StickmanPropType,
+} from './stickman-animator';
 
 export interface MediaProbeResult {
   durationSeconds: number;
@@ -823,7 +828,70 @@ export interface StorySceneSpec {
   narrationText: string;
   cameraMotion: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN_RIGHT' | 'PAN_LEFT' | 'PUNCH_SHAKE';
   sfxType: 'EFFORT' | 'KNOCK' | 'CLANG' | 'EXPLOSION' | 'DOOR_CREAK' | 'LAUGH';
+  actionType?: StickmanActionType;
+  propType?: StickmanPropType;
   durationSec: number;
+}
+
+const VALID_STICKMAN_ACTIONS: StickmanActionType[] = [
+  'WALK_CONFIDENT',
+  'PULL_HANDLE_HARD',
+  'BRACE_FOOT_AND_FALL',
+  'CROWBAR_PRY_SPARKS',
+  'FLYING_KICK_BOUNCE',
+  'THINK_LIGHTBULB_IDEA',
+  'PUSH_OPEN_AND_EXIT',
+  'SWAT_MOSQUITO_CHAOS',
+  'SPIDER_PANIC_BROOM',
+  'GYM_HEAVY_BARBELL',
+];
+
+function inferPropTypeFromIdea(idea: string): StickmanPropType {
+  if (/mosquito|zancudo|dormir|buzz/i.test(idea)) return 'MOSQUITO';
+  if (/araña|spider|insecto|bicho/i.test(idea)) return 'SPIDER';
+  if (/gimnasio|gym|pesa|barra|kilos|levantar/i.test(idea)) return 'GYM_BARBELL';
+  return 'DOOR';
+}
+
+function defaultActionSequenceForProp(prop: StickmanPropType): StickmanActionType[] {
+  if (prop === 'MOSQUITO') {
+    return [
+      'WALK_CONFIDENT',
+      'SWAT_MOSQUITO_CHAOS',
+      'FLYING_KICK_BOUNCE',
+      'BRACE_FOOT_AND_FALL',
+      'THINK_LIGHTBULB_IDEA',
+      'PUSH_OPEN_AND_EXIT',
+    ];
+  }
+  if (prop === 'SPIDER') {
+    return [
+      'WALK_CONFIDENT',
+      'SPIDER_PANIC_BROOM',
+      'CROWBAR_PRY_SPARKS',
+      'FLYING_KICK_BOUNCE',
+      'THINK_LIGHTBULB_IDEA',
+      'PUSH_OPEN_AND_EXIT',
+    ];
+  }
+  if (prop === 'GYM_BARBELL') {
+    return [
+      'WALK_CONFIDENT',
+      'GYM_HEAVY_BARBELL',
+      'PULL_HANDLE_HARD',
+      'BRACE_FOOT_AND_FALL',
+      'THINK_LIGHTBULB_IDEA',
+      'PUSH_OPEN_AND_EXIT',
+    ];
+  }
+  return [
+    'WALK_CONFIDENT',
+    'PULL_HANDLE_HARD',
+    'BRACE_FOOT_AND_FALL',
+    'FLYING_KICK_BOUNCE',
+    'THINK_LIGHTBULB_IDEA',
+    'PUSH_OPEN_AND_EXIT',
+  ];
 }
 
 const DEFAULT_NVIDIA_NIM_KEY =
@@ -853,14 +921,18 @@ export async function generateStoryboardWithNvidiaNimAsync(params: {
         ? '2D anime style character, dynamic cel shading, expressive face, clean background'
         : '2D cartoon white stickman character with round white head, big expressive cartoon eyes, black stick arms and legs, thick black outlines, mint green room background with a brown wooden door';
 
+  const propType = inferPropTypeFromIdea(params.ideaPrompt);
+  const actionSeq = defaultActionSequenceForProp(propType);
+
   try {
-    const sysPrompt = `Eres un director experto en YouTube Shorts virales de 60 segundos estilo Stickman Comedy y Animación.
+    const sysPrompt = `Eres un director experto en YouTube Shorts virales de 60 segundos estilo Stickman Comedy 2D (animación esquelética física sin narrador).
 Devuelve ÚNICAMENTE un JSON válido con un arreglo de exactamente ${sceneCount} escenas para la idea del usuario.
 Cada elemento del arreglo debe tener:
 - "sceneNumber": número del 1 al ${sceneCount}
-- "title": título corto y llamativo en español (ej. "Escena 1: ...")
-- "visualPrompt": descripción visual detallada en inglés para FLUX.1-dev que SIEMPRE empiece con "${baseCharacterStyle}," seguido del escenario, la acción exacta y la expresión facial de esa escena según la historia del usuario.
-- "narrationText": frase divertida, clara y expresiva en español que narrará el locutor en esa escena (de 10 a 18 palabras).
+- "title": título corto de la acción física en español (ej. "Escena 1: Camina Confiado hacia la Puerta")
+- "actionType": una de las animaciones esqueléticas 24fps disponibles: ["WALK_CONFIDENT", "PULL_HANDLE_HARD", "BRACE_FOOT_AND_FALL", "CROWBAR_PRY_SPARKS", "FLYING_KICK_BOUNCE", "THINK_LIGHTBULB_IDEA", "PUSH_OPEN_AND_EXIT", "SWAT_MOSQUITO_CHAOS", "SPIDER_PANIC_BROOM", "GYM_HEAVY_BARBELL"]
+- "visualPrompt": descripción visual en inglés que empiece con "${baseCharacterStyle},"
+- "narrationText": descripción breve de la acción física en español (10 a 16 palabras)
 - "cameraMotion": uno de ["ZOOM_IN", "ZOOM_OUT", "PAN_RIGHT", "PAN_LEFT", "PUNCH_SHAKE"]
 - "sfxType": uno de ["EFFORT", "KNOCK", "CLANG", "EXPLOSION", "DOOR_CREAK", "LAUGH"]`;
 
@@ -874,7 +946,7 @@ Cada elemento del arreglo debe tener:
         model: 'nvidia/nemotron-3.5-bolt-e4b',
         messages: [
           { role: 'system', content: sysPrompt },
-          { role: 'user', content: `Crea las ${sceneCount} escenas para esta historia de ${totalDur} segundos: ${params.ideaPrompt}` },
+          { role: 'user', content: `Crea las ${sceneCount} escenas animadas para esta historia de ${totalDur} segundos: ${params.ideaPrompt}` },
         ],
         max_tokens: 2200,
         temperature: 0.65,
@@ -892,6 +964,10 @@ Cada elemento del arreglo debe tener:
           return parsed.slice(0, sceneCount).map((item: any, idx: number) => ({
             sceneNumber: idx + 1,
             title: String(item.title || `Escena ${idx + 1}`),
+            actionType: (VALID_STICKMAN_ACTIONS.includes(item.actionType)
+              ? item.actionType
+              : actionSeq[idx % actionSeq.length]) as StickmanActionType,
+            propType,
             visualPrompt: String(item.visualPrompt || '').includes('stickman')
               ? String(item.visualPrompt)
               : `${baseCharacterStyle}, ${String(item.visualPrompt || params.ideaPrompt)}`,
@@ -918,12 +994,12 @@ Cada elemento del arreglo debe tener:
   if (!/puerta|door/i.test(ideaClean)) {
     const topic = ideaClean.replace(/\s+/g, ' ').slice(0, 160);
     const dynamicScenes: StorySceneSpec[] = [
-      { sceneNumber: 1, title: 'Escena 1: El Planteamiento', visualPrompt: `${baseCharacterStyle}, confident smug pose introducing the situation: ${topic}, 2D flat vector comedy frame`, narrationText: `Todo empezó así: ${topic}.`, cameraMotion: 'ZOOM_IN', sfxType: 'KNOCK', durationSec: perSceneDur },
-      { sceneNumber: 2, title: 'Escena 2: Primer Intento Exagerado', visualPrompt: `${baseCharacterStyle}, trying very hard with extreme effort and sweat in a funny exaggerated way, related to: ${topic}, 2D cartoon comedy`, narrationText: 'Su primer intento fue tan exagerado que nada salió como esperaba.', cameraMotion: 'PUNCH_SHAKE', sfxType: 'EFFORT', durationSec: perSceneDur },
-      { sceneNumber: 3, title: 'Escena 3: El Plan Extremo', visualPrompt: `${baseCharacterStyle}, determined angry face using a ridiculous oversized tool or gadget, related to: ${topic}, sparks and motion lines, 2D cartoon`, narrationText: 'Entonces sacó un plan extremo, convencido de que esta vez sí funcionaría.', cameraMotion: 'ZOOM_IN', sfxType: 'CLANG', durationSec: perSceneDur },
-      { sceneNumber: 4, title: 'Escena 4: Caos Total', visualPrompt: `${baseCharacterStyle}, chaotic comic explosion of action, flying objects, impact lines, related to: ${topic}, 2D stickman comedy`, narrationText: 'Pero todo se convirtió en un caos total, peor de lo que nadie imaginaba.', cameraMotion: 'PUNCH_SHAKE', sfxType: 'EXPLOSION', durationSec: perSceneDur },
-      { sceneNumber: 5, title: 'Escena 5: Agotado', visualPrompt: `${baseCharacterStyle}, lying exhausted and dizzy on the floor with spiral eyes, related to: ${topic}, 2D stickman cartoon`, narrationText: 'Terminó completamente agotado, sin lograr absolutamente nada.', cameraMotion: 'ZOOM_OUT', sfxType: 'EFFORT', durationSec: perSceneDur },
-      { sceneNumber: 6, title: 'Escena 6: El Remate', visualPrompt: `${baseCharacterStyle}, shocked face jaw dropped as the simplest obvious solution happens effortlessly, related to: ${topic}, 2D stickman comedy finale`, narrationText: 'Y al final, la solución era tan simple que nadie lo podía creer.', cameraMotion: 'PAN_RIGHT', sfxType: 'LAUGH', durationSec: perSceneDur },
+      { sceneNumber: 1, title: 'Escena 1: Llega Muy Confiado', actionType: actionSeq[0], propType, visualPrompt: `${baseCharacterStyle}, confident smug pose introducing the situation: ${topic}, 2D flat vector comedy frame`, narrationText: `Todo empezó así: ${topic}.`, cameraMotion: 'ZOOM_IN', sfxType: 'KNOCK', durationSec: perSceneDur },
+      { sceneNumber: 2, title: 'Escena 2: Primer Intento Físico', actionType: actionSeq[1], propType, visualPrompt: `${baseCharacterStyle}, trying very hard with extreme effort and sweat in a funny exaggerated way, related to: ${topic}, 2D cartoon comedy`, narrationText: 'Su primer intento fue tan exagerado que nada salió como esperaba.', cameraMotion: 'PUNCH_SHAKE', sfxType: 'EFFORT', durationSec: perSceneDur },
+      { sceneNumber: 3, title: 'Escena 3: Plan Extremo', actionType: actionSeq[2], propType, visualPrompt: `${baseCharacterStyle}, determined angry face using a ridiculous oversized tool or gadget, related to: ${topic}, sparks and motion lines, 2D cartoon`, narrationText: 'Entonces sacó un plan extremo, convencido de que esta vez sí funcionaría.', cameraMotion: 'ZOOM_IN', sfxType: 'CLANG', durationSec: perSceneDur },
+      { sceneNumber: 4, title: 'Escena 4: Ataque Volador y Caída', actionType: actionSeq[3], propType, visualPrompt: `${baseCharacterStyle}, chaotic comic explosion of action, flying objects, impact lines, related to: ${topic}, 2D stickman comedy`, narrationText: 'Se lanzó con todo por el aire y terminó rebotando contra el suelo.', cameraMotion: 'PUNCH_SHAKE', sfxType: 'EXPLOSION', durationSec: perSceneDur },
+      { sceneNumber: 5, title: 'Escena 5: ¡Se Enciende el Bombillo! 💡', actionType: actionSeq[4], propType, visualPrompt: `${baseCharacterStyle}, sitting on floor thinking until a glowing yellow lightbulb appears over head, related to: ${topic}, 2D stickman cartoon`, narrationText: 'Después de caer al piso, se puso a pensar hasta que tuvo una idea brillante.', cameraMotion: 'ZOOM_OUT', sfxType: 'EFFORT', durationSec: perSceneDur },
+      { sceneNumber: 6, title: 'Escena 6: Solución Sin Esfuerzo', actionType: actionSeq[5], propType, visualPrompt: `${baseCharacterStyle}, smug smile as the simplest obvious solution works effortlessly and walks out, related to: ${topic}, 2D stickman comedy finale`, narrationText: 'Al final, hizo lo más simple del mundo y salió caminando como un campeón.', cameraMotion: 'PAN_RIGHT', sfxType: 'LAUGH', durationSec: perSceneDur },
     ];
     return dynamicScenes.slice(0, sceneCount);
   }
@@ -931,54 +1007,66 @@ Cada elemento del arreglo debe tener:
   const defaultScenes: StorySceneSpec[] = [
     {
       sceneNumber: 1,
-      title: 'Escena 1: El Exceso de Confianza',
-      visualPrompt: `${baseCharacterStyle}, standing confidently with hands on hips smiling smugly in front of a closed brown wooden door, 2D flat vector animation frame`,
-      narrationText: `Nuestro protagonista llegó muy confiado frente a la puerta: ${ideaClean}.`,
+      title: 'Escena 1: Camina Confiado hacia la Puerta',
+      actionType: 'WALK_CONFIDENT',
+      propType: 'DOOR',
+      visualPrompt: `${baseCharacterStyle}, walking confidently with hands on hips smiling smugly toward a closed brown wooden door, 2D flat vector animation`,
+      narrationText: 'Camina muy confiado hacia la puerta marrón, se pone las manos en la cintura y agarra el pomo.',
       cameraMotion: 'ZOOM_IN',
       sfxType: 'KNOCK',
       durationSec: perSceneDur,
     },
     {
       sceneNumber: 2,
-      title: 'Escena 2: Tirando con Toda su Fuerza',
-      visualPrompt: `${baseCharacterStyle}, pulling the door handle with both hands with extreme effort, squinting eyes, foot braced against the door, sweating, 2D cartoon comedy`,
-      narrationText: 'Primero tiró de la manija con todas sus fuerzas, apoyando hasta el pie en la pared.',
+      title: 'Escena 2: Jala la Manija con Ambas Manos',
+      actionType: 'PULL_HANDLE_HARD',
+      propType: 'DOOR',
+      visualPrompt: `${baseCharacterStyle}, pulling the door handle with both hands leaning backward with effort, sweating, 2D cartoon comedy`,
+      narrationText: 'Agarra el pomo con las dos manos y tira hacia atrás con todas sus fuerzas sudando la gota gorda.',
       cameraMotion: 'PUNCH_SHAKE',
       sfxType: 'EFFORT',
       durationSec: perSceneDur,
     },
     {
       sceneNumber: 3,
-      title: 'Escena 3: La Palanca de Acero',
-      visualPrompt: `${baseCharacterStyle}, angry determined face using a red metal crowbar wedged into the brown door frame trying to pry it open, sparks flying, 2D cartoon`,
-      narrationText: 'Como no abría, trajo una palanca de hierro gigante e intentó forzar el marco sin éxito.',
-      cameraMotion: 'ZOOM_IN',
+      title: 'Escena 3: Apoya el Pie en la Puerta y Cae de Espaldas',
+      actionType: 'BRACE_FOOT_AND_FALL',
+      propType: 'DOOR',
+      visualPrompt: `${baseCharacterStyle}, bracing one foot against the brown door pulling with squinting >< eyes then slipping and falling on the floor`,
+      narrationText: 'Apoya el pie contra la puerta para jalar más fuerte, se resbala de golpe y cae sentado al suelo.',
+      cameraMotion: 'PUNCH_SHAKE',
       sfxType: 'CLANG',
       durationSec: perSceneDur,
     },
     {
       sceneNumber: 4,
-      title: 'Escena 4: Patada Voladora Extrema',
-      visualPrompt: `${baseCharacterStyle}, jumping in mid-air delivering a dramatic flying karate kick against the closed brown door, comic impact lines, 2D stickman comedy`,
-      narrationText: 'Desesperado, tomó impulso desde el pasillo y lanzó una patada voladora digna de película.',
+      title: 'Escena 4: Patada Voladora y Rebote',
+      actionType: 'FLYING_KICK_BOUNCE',
+      propType: 'DOOR',
+      visualPrompt: `${baseCharacterStyle}, jumping in mid-air delivering a dramatic flying karate kick against the closed brown door and bouncing off`,
+      narrationText: 'Toma impulso furioso, lanza una patada voladora en el aire contra la puerta y rebota al piso.',
       cameraMotion: 'PUNCH_SHAKE',
       sfxType: 'EXPLOSION',
       durationSec: perSceneDur,
     },
     {
       sceneNumber: 5,
-      title: 'Escena 5: Agotado en el Suelo',
-      visualPrompt: `${baseCharacterStyle}, lying exhausted and dizzy on the mint green floor next to the intact brown door, spiral eyes, 2D stickman cartoon`,
-      narrationText: 'Terminó completamente agotado en el suelo mientras la puerta seguía intacta sin un rasguño.',
+      title: 'Escena 5: Piensa en el Piso y Sale el Bombillo 💡',
+      actionType: 'THINK_LIGHTBULB_IDEA',
+      propType: 'DOOR',
+      visualPrompt: `${baseCharacterStyle}, sitting on floor scratching head then standing up as a bright yellow lightbulb pops above his head`,
+      narrationText: 'Sentado en el suelo se rasca la cabeza pensando, hasta que se le prende el bombillo con la idea obvia.',
       cameraMotion: 'ZOOM_OUT',
       sfxType: 'EFFORT',
       durationSec: perSceneDur,
     },
     {
       sceneNumber: 6,
-      title: 'Escena 6: Solo Había que Empujar',
-      visualPrompt: `${baseCharacterStyle}, shocked face with jaw dropped watching as the brown wooden door swings open easily inward with a gentle push, 2D stickman comedy finale`,
-      narrationText: 'Hasta que alguien llegó, simplemente empujó la puerta hacia adentro y se abrió sin esfuerzo.',
+      title: 'Escena 6: Empuja la Puerta Suavemente y Sale',
+      actionType: 'PUSH_OPEN_AND_EXIT',
+      propType: 'DOOR',
+      visualPrompt: `${baseCharacterStyle}, pushing the brown wooden door gently inward as it swings open easily and walking out smugly`,
+      narrationText: 'Se acerca tranquilo, empuja la puerta hacia adentro con una sola mano y sale caminando con sonrisa de victoria.',
       cameraMotion: 'PAN_RIGHT',
       sfxType: 'LAUGH',
       durationSec: perSceneDur,
@@ -1075,30 +1163,30 @@ export async function render60sStoryVideoFromScenesAsync(params: {
   let cumulativeSec = 0;
 
   const totalScenes = params.scenes.length;
-  const voice = params.voiceName || 'es-MX-JorgeNeural';
+  const voice = params.voiceName || 'NONE';
+  const useVoice = voice !== 'NONE' && voice !== 'MUTE';
+  const defaultActions = defaultActionSequenceForProp('DOOR');
 
   for (let i = 0; i < totalScenes; i++) {
     const sc = params.scenes[i];
     const basePct = Math.round(5 + (i / totalScenes) * 75);
+    const sceneDur = Math.max(4, Math.min(18, Number(sc.durationSec) || 10));
+    const resolvedAction: StickmanActionType =
+      sc.actionType && VALID_STICKMAN_ACTIONS.includes(sc.actionType)
+        ? sc.actionType
+        : defaultActions[i % defaultActions.length];
+    const resolvedProp: StickmanPropType =
+      sc.propType || inferPropTypeFromIdea(`${sc.title} ${sc.visualPrompt} ${sc.narrationText}`);
+
     params.onProgress?.(
       basePct,
-      `Generando Escena ${i + 1}/${totalScenes} con NVIDIA FLUX.1-dev ("${sc.title}")...`
+      `Animando Escena ${i + 1}/${totalScenes} a 24 FPS (${resolvedAction}: "${sc.title}")...`
     );
 
-    const imgPath = path.join(params.outputDir, `scene_${i + 1}_keyframe.png`);
-    await generateSceneImageWithNvidiaNimAsync({
-      visualPrompt: sc.visualPrompt,
-      outputPath: imgPath,
-      seed: params.seed || 42,
-      nvidiaApiKey: params.nvidiaApiKey,
-      sceneNumber: sc.sceneNumber,
-    });
-    sceneThumbnails.push(imgPath);
-
-    // Generate TTS voiceover audio for this scene using edge-tts (or comedic SFX synth tone fallback)
+    // Optional TTS voiceover audio if user selected a voice (by default NONE = physical comedy + SFX only)
     const ttsPath = path.join(params.outputDir, `scene_${i + 1}_tts.mp3`);
     let hasTts = false;
-    if (sc.narrationText && sc.narrationText.trim().length > 0) {
+    if (useVoice && sc.narrationText && sc.narrationText.trim().length > 0) {
       try {
         const ttsProc = await runCommandAsync(
           'python3',
@@ -1111,131 +1199,37 @@ export async function render60sStoryVideoFromScenesAsync(params: {
       } catch {}
     }
 
-    const sceneDur = Math.max(4, Math.min(18, Number(sc.durationSec) || 10));
-    const totalFrames = Math.round(sceneDur * 24);
-
-    // Build word timestamps for this scene so burned-in ASS subtitles match the narration
-    const words = (sc.narrationText || sc.title).split(/\s+/).filter(Boolean);
-    const speakSpan = Math.max(2.0, sceneDur - 0.8);
-    const wordStep = speakSpan / Math.max(words.length, 1);
-    words.forEach((w, wIdx) => {
-      allWords.push({
-        word: w,
-        start: Number((cumulativeSec + 0.3 + wIdx * wordStep).toFixed(2)),
-        end: Number((cumulativeSec + 0.3 + (wIdx + 1) * wordStep).toFixed(2)),
-        confidence: 0.98,
-        speaker: 'Narrador',
-        isFiller: false,
+    if (useVoice && params.burnSubtitles) {
+      const words = (sc.narrationText || sc.title).split(/\s+/).filter(Boolean);
+      const speakSpan = Math.max(2.0, sceneDur - 0.8);
+      const wordStep = speakSpan / Math.max(words.length, 1);
+      words.forEach((w, wIdx) => {
+        allWords.push({
+          word: w,
+          start: Number((cumulativeSec + 0.3 + wIdx * wordStep).toFixed(2)),
+          end: Number((cumulativeSec + 0.3 + (wIdx + 1) * wordStep).toFixed(2)),
+          confidence: 0.98,
+          speaker: 'Narrador',
+          isFiller: false,
+        });
       });
-    });
+    }
     cumulativeSec += sceneDur;
 
-    // Camera motion expression in FFmpeg zoompan (720x1280 @ 24fps)
-    let zpFilter = `scale=1440:2560,zoompan=z='min(zoom+0.0008,1.22)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=720x1280:fps=24`;
-    if (sc.cameraMotion === 'ZOOM_OUT') {
-      zpFilter = `scale=1440:2560,zoompan=z='max(1.22-0.0008*on,1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=720x1280:fps=24`;
-    } else if (sc.cameraMotion === 'PAN_RIGHT') {
-      zpFilter = `scale=1440:2560,zoompan=z='1.15':x='(iw-iw/zoom)*(on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=720x1280:fps=24`;
-    } else if (sc.cameraMotion === 'PAN_LEFT') {
-      zpFilter = `scale=1440:2560,zoompan=z='1.15':x='(iw-iw/zoom)*(1-on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=720x1280:fps=24`;
-    } else if (sc.cameraMotion === 'PUNCH_SHAKE') {
-      zpFilter = `scale=1440:2560,zoompan=z='min(zoom+0.0012,1.26)':x='iw/2-(iw/zoom/2)+sin(on*1.7)*14':y='ih/2-(ih/zoom/2)+cos(on*2.1)*10':d=${totalFrames}:s=720x1280:fps=24`;
-    }
-
-    const fadeOutSt = Math.max(0.5, sceneDur - 0.35).toFixed(2);
-    const vf = `${zpFilter},fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutSt}:d=0.3,format=yuv420p`;
-
     const sceneMp4 = path.join(params.outputDir, `scene_${i + 1}_clip.mp4`);
-    const sfxFreq =
-      sc.sfxType === 'EXPLOSION'
-        ? 110
-        : sc.sfxType === 'CLANG'
-          ? 620
-          : sc.sfxType === 'LAUGH'
-            ? 520
-            : sc.sfxType === 'KNOCK'
-              ? 240
-              : 340;
-
-    if (hasTts) {
-      await runCommandAsync(
-        'ffmpeg',
-        [
-          '-y',
-          '-loop',
-          '1',
-          '-i',
-          imgPath,
-          '-i',
-          ttsPath,
-          '-f',
-          'lavfi',
-          '-i',
-          `sine=frequency=${sfxFreq}:beep_factor=2:duration=${sceneDur}`,
-          '-filter_complex',
-          `[0:v]${vf}[v];[1:a]volume=1.35,apad=whole_dur=${sceneDur}[voice];[2:a]volume=0.06[sfx];[voice][sfx]amix=inputs=2:duration=first[a]`,
-          '-map',
-          '[v]',
-          '-map',
-          '[a]',
-          '-t',
-          String(sceneDur),
-          '-c:v',
-          'libx264',
-          '-preset',
-          'ultrafast',
-          '-crf',
-          '22',
-          '-c:a',
-          'aac',
-          '-ar',
-          '44100',
-          '-ac',
-          '2',
-          '-b:a',
-          '128k',
-          sceneMp4,
-        ],
-        60000
-      );
-    } else {
-      await runCommandAsync(
-        'ffmpeg',
-        [
-          '-y',
-          '-loop',
-          '1',
-          '-i',
-          imgPath,
-          '-f',
-          'lavfi',
-          '-i',
-          `sine=frequency=${sfxFreq}:beep_factor=3:duration=${sceneDur}`,
-          '-vf',
-          vf,
-          '-af',
-          'volume=0.14',
-          '-t',
-          String(sceneDur),
-          '-c:v',
-          'libx264',
-          '-preset',
-          'ultrafast',
-          '-crf',
-          '22',
-          '-c:a',
-          'aac',
-          '-ar',
-          '44100',
-          '-ac',
-          '2',
-          '-b:a',
-          '128k',
-          sceneMp4,
-        ],
-        60000
-      );
-    }
+    await renderAnimatedStickmanSceneToMp4Async({
+      scene: {
+        sceneNumber: i + 1,
+        title: sc.title,
+        actionType: resolvedAction,
+        propType: resolvedProp,
+        durationSec: sceneDur,
+        narrationText: sc.narrationText,
+      },
+      outputMp4Path: sceneMp4,
+      voiceMp3Path: hasTts ? ttsPath : undefined,
+      fps: 24,
+    });
 
     sceneClipPaths.push(sceneMp4);
   }

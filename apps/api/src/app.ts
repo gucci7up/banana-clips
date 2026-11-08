@@ -1679,8 +1679,8 @@ export async function createBananaApiApp(): Promise<Express> {
       totalDurationSec = 60,
       nvidiaApiKey,
       seed = 42,
-      voiceName = 'es-MX-JorgeNeural',
-      burnSubtitles = true,
+      voiceName = 'NONE',
+      burnSubtitles = false,
     } = req.body || {};
 
     const jobId = crypto.randomUUID();
