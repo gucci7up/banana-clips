@@ -1252,16 +1252,41 @@ export async function createBananaApiApp(): Promise<Express> {
       [jobId, req.user!.sub, projectId, videoId, jobType, JSON.stringify(configJson)]
     );
 
+    const autoNotifyTelegramOnJobDone = async (uid: string, vid: string) => {
+      try {
+        const cfgRes = await db.query<{ valueJson: string }>(
+          `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
+          [`telegram_config_${uid}`]
+        );
+        if (!cfgRes.rows[0]?.valueJson) return;
+        const parsed = JSON.parse(cfgRes.rows[0].valueJson);
+        if (parsed.autoSendLiveClips === false || !parsed.botToken || !parsed.chatId) return;
+        const newClips = await db.query<{ id: string }>(
+          `SELECT id FROM "Clip" WHERE "videoId" = $1 ORDER BY "createdAt" DESC LIMIT 3`,
+          [vid]
+        );
+        for (const c of newClips.rows) {
+          await sendClipToTelegramHelperAsync({ userId: uid, clipId: c.id });
+        }
+      } catch {}
+    };
+
     if (syncExecution) {
       const result = await executeAiClippingJob(jobId);
       const jobAfter = await db.query(`SELECT * FROM "AnalysisJob" WHERE id = $1`, [jobId]);
+      setImmediate(() => {
+        autoNotifyTelegramOnJobDone(req.user!.sub, videoId);
+      });
       return res.status(201).json({ jobId, job: jobAfter.rows[0], result });
     } else {
       // Trigger asynchronous worker execution immediately without blocking HTTP response
+      const uid = req.user!.sub;
       setImmediate(() => {
-        executeAiClippingJob(jobId).catch((err) => {
-          console.error(`[JOB ${jobId}] Falló procesamiento asíncrono:`, err?.message);
-        });
+        executeAiClippingJob(jobId)
+          .then(() => autoNotifyTelegramOnJobDone(uid, videoId))
+          .catch((err) => {
+            console.error(`[JOB ${jobId}] Falló procesamiento asíncrono:`, err?.message);
+          });
       });
       return res.status(202).json({
         jobId,
