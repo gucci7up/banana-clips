@@ -638,10 +638,36 @@ export async function createBananaApiApp(): Promise<Express> {
       }`,
       filterParams
     );
+    const activeLiveStreams = await db.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM "VideoSource" vs JOIN "Video" v ON v.id = vs."videoId" ${
+        isGlobal
+          ? `WHERE vs."liveStreamState" = 'RECORDING'`
+          : `WHERE v."userId" = $1 AND vs."liveStreamState" = 'RECORDING'`
+      }`,
+      filterParams
+    );
 
     const usageAgg = await db.query<{ minutes: number; bytes: string }>(
       `SELECT COALESCE(SUM("minutesProcessed"), 0) as minutes, COALESCE(SUM("storageBytesUsed"), 0)::text as bytes
        FROM "ResourceUsage" ${filterClause}`,
+      filterParams
+    );
+
+    const storageAgg = await db.query<{ bytes: string }>(
+      `SELECT COALESCE(SUM("sizeBytes"), 0)::text as bytes FROM "StorageObject" ${filterClause}`,
+      filterParams
+    );
+
+    const clipDurAgg = await db.query<{ sec: number }>(
+      `SELECT COALESCE(SUM("durationSec"), 0) as sec FROM "Clip" ${filterClause}`,
+      filterParams
+    );
+
+    const videoDurAgg = await db.query<{ sec: number }>(
+      `SELECT COALESCE(SUM(vm."durationSeconds"), 0) as sec
+       FROM "VideoMetadata" vm
+       JOIN "Video" v ON v.id = vm."videoId"
+       ${isGlobal ? '' : 'WHERE v."userId" = $1'}`,
       filterParams
     );
 
@@ -665,15 +691,28 @@ export async function createBananaApiApp(): Promise<Express> {
 
     const workers = await db.query(`SELECT * FROM "ProcessingWorker" ORDER BY "workerName" ASC`);
 
+    const rawProjects = Number(projectsCount.rows[0]?.count || 0);
+    const rawVideos = Number(videosCount.rows[0]?.count || 0);
+    const rawClips = Number(clipsCount.rows[0]?.count || 0);
+    const computedMinutes =
+      Number(usageAgg.rows[0]?.minutes || 0) +
+      (Number(clipDurAgg.rows[0]?.sec || 0) + Number(videoDurAgg.rows[0]?.sec || 0)) / 60;
+    const computedBytes = Math.max(
+      Number(usageAgg.rows[0]?.bytes || 0),
+      Number(storageAgg.rows[0]?.bytes || 0)
+    );
+    const computedActiveTasks =
+      Number(activeJobs.rows[0]?.count || 0) + Number(activeLiveStreams.rows[0]?.count || 0);
+
     return res.json({
       scope: isGlobal ? 'GLOBAL_ADMIN' : 'USER_PRIVATE',
       stats: {
-        totalProjects: Number(projectsCount.rows[0]?.count || 0),
-        videosProcessed: Number(videosCount.rows[0]?.count || 0),
-        clipsCreated: Number(clipsCount.rows[0]?.count || 0),
-        minutesProcessed: Number(Number(usageAgg.rows[0]?.minutes || 0).toFixed(2)),
-        storageBytesUsed: Number(usageAgg.rows[0]?.bytes || 0),
-        activeTasks: Number(activeJobs.rows[0]?.count || 0),
+        totalProjects: Math.max(rawProjects, rawVideos),
+        videosProcessed: rawVideos,
+        clipsCreated: rawClips,
+        minutesProcessed: Number(computedMinutes.toFixed(1)),
+        storageBytesUsed: computedBytes,
+        activeTasks: computedActiveTasks,
       },
       recentJobs: recentJobs.rows,
       recentClips: recentClips.rows,
@@ -1751,6 +1790,15 @@ export async function createBananaApiApp(): Promise<Express> {
           [storageObjId, params.userId, `live_clip_${clipId}.mp4`, clipFileAbs, statSize]
         );
 
+        await db.query(
+          `UPDATE "ResourceUsage"
+           SET "storageBytesUsed" = "storageBytesUsed" + $1,
+               "minutesProcessed" = "minutesProcessed" + $2,
+               "clipsGenerated" = "clipsGenerated" + 1
+           WHERE "userId" = $3`,
+          [statSize, Number((clipDur / 60).toFixed(2)), params.userId]
+        );
+
         const transcriptPreview = (bestSummary || finalWords.map((w) => w.word).join(' ')).slice(0, 220);
         const firstWordsTitle = transcriptPreview.split(/\s+/).slice(0, 7).join(' ');
         const clipTitle =
@@ -2109,6 +2157,16 @@ export async function createBananaApiApp(): Promise<Express> {
           `INSERT INTO "StorageObject" ("id", "userId", "bucket", "objectKey", "localPath", "mimeType", "sizeBytes")
            VALUES ($1, $2, 'banana-clips', $3, $4, 'video/mp4', $5)`,
           [storageObjId, userId, `story_${clipId}.mp4`, clipFileAbs, statSize]
+        );
+
+        await db.query(
+          `UPDATE "ResourceUsage"
+           SET "storageBytesUsed" = "storageBytesUsed" + $1,
+               "minutesProcessed" = "minutesProcessed" + $2,
+               "videosProcessed" = "videosProcessed" + 1,
+               "clipsGenerated" = "clipsGenerated" + 1
+           WHERE "userId" = $3`,
+          [statSize, Number((rendered.durationSeconds / 60).toFixed(2)), userId]
         );
 
         // Also register as a Video + Clip + Montage so it appears in AI Montage, AI Clipping & My Library!
