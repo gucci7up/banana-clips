@@ -5,6 +5,7 @@ import { getDb, type DatabaseEngine } from '@banana/database';
 import { calculateMultimodalClipScore, SUBTITLE_TEMPLATES } from '@banana/shared';
 import type { AspectRatio, JobState, SubtitleTemplateName, WordTimestamp } from '@banana/video-types';
 import {
+  analyzeClipArcAndDebateWithClaudeAsync,
   applyVoiceDubbingToClipAsync,
   buildSrtAndVttFromWords,
   downloadVideoFromExternalUrlAsync,
@@ -782,13 +783,20 @@ export async function executeAiClippingJob(jobId: string): Promise<{
 
       let cleanHeadline = cand.text.replace(/[¿?¡!.,[\]]/g, '').split(/\s+/).filter(Boolean).slice(0, 7).join(' ');
       let title = `Clip #${i + 1}: ${cleanHeadline}`;
+      let effectiveCtaOutroText = ctaOutroText;
       try {
-        const grokHook = await generateViralHookWithGrokAsync(cand.text, title);
-        if (grokHook.hookBannerText) {
+        const [grokHook, claudeArc] = await Promise.all([
+          generateViralHookWithGrokAsync(cand.text, title).catch(() => null),
+          analyzeClipArcAndDebateWithClaudeAsync({ transcriptText: cand.text, durationSec }).catch(() => null),
+        ]);
+        if (grokHook?.hookBannerText) {
           cleanHeadline = grokHook.hookBannerText;
         }
-        if (grokHook.clickbaitTitle) {
+        if (grokHook?.clickbaitTitle) {
           title = `🔥 Clip #${i + 1}: ${grokHook.clickbaitTitle}`;
+        }
+        if (claudeArc?.debateCtaQuestion && (!ctaOutroText || ctaOutroText === 'Siguenos para mas clips virales')) {
+          effectiveCtaOutroText = claudeArc.debateCtaQuestion;
         }
       } catch {
         // Fallback to transcript headline
@@ -803,7 +811,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         motionGraphics,
         captionPresetId,
         brandWatermarkText: brandWatermarkText.trim() || undefined,
-        ctaOutroText: ctaOutro ? ctaOutroText : undefined,
+        ctaOutroText: ctaOutro ? effectiveCtaOutroText : undefined,
         clipDurationSec: durationSec,
       });
       const assFileAbs = path.join(storageRoot, 'banana-clips', `sub_${clipId}.ass`);

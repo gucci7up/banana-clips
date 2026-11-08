@@ -36,7 +36,9 @@ export default function SocialPublishingPage() {
   const [caption, setCaption] = useState('');
   const [hashtags, setHashtags] = useState<string[]>(['#viral', '#shorts', '#fyp', '#parati']);
   const [xThread, setXThread] = useState<string[]>([]);
-  const [aiEngineUsed, setAiEngineUsed] = useState('Grok 4.20 (xAI)');
+  const [youtubeChapters, setYoutubeChapters] = useState<string[]>([]);
+  const [debateQuestion, setDebateQuestion] = useState<string>('');
+  const [aiEngineUsed, setAiEngineUsed] = useState('Motor Dual: Grok 4.20 + Claude 5.5');
   const [bestTimeRec, setBestTimeRec] = useState('19:30 (Pico Viral +46%)');
   const [scheduledAt, setScheduledAt] = useState('');
 
@@ -122,6 +124,8 @@ export default function SocialPublishingPage() {
         caption: string;
         hashtags: string[];
         xThread?: string[];
+        youtubeChapters?: string[];
+        debateQuestion?: string;
         aiEngineUsed?: string;
         bestTimeRecommendation: string;
       }>('/social/ai-copywriter', {
@@ -138,6 +142,8 @@ export default function SocialPublishingPage() {
       setCaption(res.caption);
       setHashtags(res.hashtags || []);
       setXThread(res.xThread || []);
+      setYoutubeChapters(res.youtubeChapters || []);
+      setDebateQuestion(res.debateQuestion || '');
       if (res.aiEngineUsed) setAiEngineUsed(res.aiEngineUsed);
       setBestTimeRec(res.bestTimeRecommendation || '19:30 (Pico Viral +45%)');
     } catch (err: any) {
@@ -495,8 +501,9 @@ export default function SocialPublishingPage() {
                   onChange={(e) => setTone(e.target.value)}
                   className="mt-1 w-full rounded-xl border border-slate-700 bg-[#0B0D12] p-2.5 text-xs font-bold text-white"
                 >
-                  <option value="VIRAL">🔥 Viral & Polémico (Grok)</option>
+                  <option value="VIRAL">🔥 Viral & Polémico (Grok + Claude)</option>
                   <option value="GROK_SPICY">🌶️ Modo Grok Sin Filtro (Polémico X)</option>
+                  <option value="CLAUDE_STORY">🧠 Modo Claude 5.5 (Storytelling & YouTube SEO)</option>
                   <option value="URGENT">🚨 Breaking News</option>
                   <option value="HUMOR">😂 Humor & Comedia</option>
                   <option value="EDUCATIONAL">📚 Educativo / Valor</option>
@@ -645,6 +652,44 @@ export default function SocialPublishingPage() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {(youtubeChapters.length > 0 || debateQuestion) && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-amber-300">
+                      🧠 Dirección Narrativa Claude 5.5 (Capítulos SEO + Pregunta Imán de Comentarios)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const text = [
+                          youtubeChapters.length > 0 ? `📺 Capítulos:\n${youtubeChapters.join('\n')}` : '',
+                          debateQuestion ? `💬 Pregunta de Debate: ${debateQuestion}` : '',
+                        ]
+                          .filter(Boolean)
+                          .join('\n\n');
+                        navigator.clipboard.writeText(text);
+                        setNotice('📋 ¡Capítulos SEO y pregunta de debate de Claude 5.5 copiados!');
+                      }}
+                      className="rounded-lg bg-amber-500/20 px-2.5 py-1 text-[10px] font-bold text-amber-200 hover:bg-amber-500/30"
+                    >
+                      📋 Copiar Bloque Claude
+                    </button>
+                  </div>
+                  {debateQuestion && (
+                    <div className="rounded-lg border border-amber-500/30 bg-[#0B0D12]/90 p-2 text-[11px] font-bold text-[#FFD43B]">
+                      💬 Pregunta Imán de Comentarios: &ldquo;{debateQuestion}&rdquo;
+                    </div>
+                  )}
+                  {youtubeChapters.length > 0 && (
+                    <div className="rounded-lg border border-slate-800 bg-[#0B0D12]/90 p-2 text-[11px] font-mono text-slate-300 space-y-0.5">
+                      {youtubeChapters.map((ch, idx) => (
+                        <div key={idx}>{ch}</div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

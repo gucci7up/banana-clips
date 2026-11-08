@@ -141,6 +141,22 @@ export default function LiveClipperPage() {
     }
   };
 
+  const handleColdOpenLiveClip = async (clipId: string) => {
+    setBusyClipId(clipId);
+    setActionNotice('⚡ Claude 5.5 adelantando los 2.5s más explosivos al inicio (Cold Open)...');
+    try {
+      const res = await apiFetch<{ message: string }>(`/clips/${clipId}/cold-open`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setActionNotice(res.message || '✅ Cold Open aplicado con Claude 5.5.');
+    } catch (err: any) {
+      setActionNotice(`⚠️ ${err?.message || 'Error al aplicar Cold Open con Claude 5.5.'}`);
+    } finally {
+      setBusyClipId(null);
+    }
+  };
+
   const handleCaptureCutNow = async (targetVidId?: string) => {
     const vid = targetVidId || activeVideoId;
     if (!vid) return;
@@ -485,7 +501,16 @@ export default function LiveClipperPage() {
                         className="rounded-lg border border-purple-500/40 bg-purple-500/15 px-2.5 py-1 text-[11px] font-bold text-purple-300 hover:bg-purple-500/25 disabled:opacity-40"
                         title="Generar Portada 100% IA con Grok Imagine ($0.02)"
                       >
-                        {busyClipId === c.id ? '⏳ Grok IA...' : '🎨 Portada IA (Grok)'}
+                        {busyClipId === c.id ? '⏳ IA...' : '🎨 Portada IA (Grok)'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyClipId === c.id}
+                        onClick={() => handleColdOpenLiveClip(c.id)}
+                        className="rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/25 disabled:opacity-40"
+                        title="Adelantar los 2.5s más explosivos al inicio con Claude 5.5"
+                      >
+                        ⚡ Cold Open (Claude)
                       </button>
                       <button
                         type="button"

@@ -1135,6 +1135,239 @@ export function mixBackgroundMusicWithAutoDucking(videoPath: string, musicPath: 
 }
 
 export const DEFAULT_XAI_GROK_KEY = process.env.XAI_API_KEY || '';
+export const DEFAULT_ANTHROPIC_CLAUDE_KEY = process.env.ANTHROPIC_API_KEY || '';
+
+/**
+ * Calls Anthropic Claude 5.5 API (`claude-haiku-5-5` by default with `thinking: disabled` for ultra-fast, zero-overhead execution)
+ */
+export async function callClaudeAnthropicAsync(params: {
+  systemPrompt: string;
+  userPrompt: string;
+  maxTokens?: number;
+  temperature?: number;
+  model?: string;
+  anthropicApiKey?: string;
+}): Promise<string | null> {
+  const apiKey = (params.anthropicApiKey || DEFAULT_ANTHROPIC_CLAUDE_KEY).trim();
+  if (!apiKey) return null;
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: JSON.stringify({
+        model: params.model || 'claude-haiku-5-5',
+        max_tokens: params.maxTokens || 320,
+        thinking: { type: 'disabled' },
+        system: params.systemPrompt,
+        messages: [{ role: 'user', content: params.userPrompt }],
+      }),
+      signal: AbortSignal.timeout(16000),
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
+      const textBlock = blocks.find((b) => b.type === 'text') || blocks[0];
+      const text = String(textBlock?.text || '').trim();
+      if (text.length > 2) return text;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Uses Claude 5.5 (Anthropic) to analyze the narrative arc of a clip, locate the exact climax timestamp ratio,
+ * and craft a polarizing "Comment-Magnet Question" for the final seconds of the video.
+ */
+export async function analyzeClipArcAndDebateWithClaudeAsync(params: {
+  transcriptText: string;
+  durationSec: number;
+}): Promise<{
+  climaxSecond: number;
+  debateCtaQuestion: string;
+  teaserText: string;
+  narrativeArcSummary: string;
+}> {
+  const dur = Math.max(6, Number(params.durationSec) || 20);
+  const defaultClimax = Number(Math.max(2, Math.min(dur - 3, dur * 0.62)).toFixed(1));
+  const clean = (params.transcriptText || '').replace(/\s+/g, ' ').trim();
+
+  if (clean.length < 15) {
+    return {
+      climaxSecond: defaultClimax,
+      debateCtaQuestion: '¿QUÉ OPINAS DE ESTO? TE LEO EN COMENTARIOS',
+      teaserText: 'ESPERA A VER EL FINAL',
+      narrativeArcSummary: 'Corte directo con gancho inicial y remate.',
+    };
+  }
+
+  const claudeOut = await callClaudeAnthropicAsync({
+    systemPrompt:
+      'You are Claude, an elite podcast & short-form retention director. Given a transcript and clip duration in seconds, return ONLY valid JSON: {"climaxRatio":0.65,"debateQuestion":"SHORT POLARIZING QUESTION IN SPANISH UPPERCASE (MAX 7 WORDS) TO SPARK COMMENTS","teaserText":"4 WORD SPANISH TEASER FOR COLD OPEN","arcSummary":"1 sentence in Spanish explaining the story arc"}',
+    userPrompt: `Duration: ${dur}s. Transcript: "${clean.slice(0, 480)}"`,
+    maxTokens: 160,
+  });
+
+  if (claudeOut) {
+    try {
+      const m = claudeOut.match(/\{[\s\S]*\}/);
+      if (m) {
+        const parsed = JSON.parse(m[0]);
+        const ratio = Math.max(0.25, Math.min(0.85, Number(parsed.climaxRatio) || 0.62));
+        const climaxSecond = Number(Math.max(1.5, Math.min(dur - 2.8, dur * ratio)).toFixed(1));
+        const debateCtaQuestion = String(parsed.debateQuestion || '¿ESTÁS DE ACUERDO O SE EQUIVOCA?')
+          .replace(/["{}]/g, '')
+          .toUpperCase()
+          .trim()
+          .slice(0, 54);
+        const teaserText = String(parsed.teaserText || 'MIRA LO QUE PASA')
+          .replace(/["{}]/g, '')
+          .toUpperCase()
+          .trim()
+          .slice(0, 32);
+        const narrativeArcSummary = String(
+          parsed.arcSummary || 'Arco narrativo validado por Claude 5.5 con clímax y pregunta de debate.'
+        )
+          .trim()
+          .slice(0, 180);
+        return { climaxSecond, debateCtaQuestion, teaserText, narrativeArcSummary };
+      }
+    } catch {}
+  }
+
+  return {
+    climaxSecond: defaultClimax,
+    debateCtaQuestion: '¿QUIÉN TIENE LA RAZÓN AQUÍ? OPINA ABAJO',
+    teaserText: 'ESPERA A VER EL REMATE',
+    narrativeArcSummary: 'Estructura con gancho y remate.',
+  };
+}
+
+/**
+ * Applies a "Cold Open / Hook Splicing" edit directed by Claude 5.5:
+ * Finds the most explosive 2.5 seconds inside the clip, stamps an "⚡ ADELANTO" banner,
+ * and prepends it to 00:00 before the full clip plays.
+ */
+export async function applyColdOpenToClipWithClaudeAsync(params: {
+  videoPath: string;
+  transcriptText: string;
+  durationSec: number;
+}): Promise<{ applied: boolean; climaxSecond: number; teaserText: string; debateCtaQuestion: string; newDurationSec: number }> {
+  if (!fs.existsSync(params.videoPath)) {
+    throw new Error('No se encontró el archivo de video del clip.');
+  }
+
+  const arc = await analyzeClipArcAndDebateWithClaudeAsync({
+    transcriptText: params.transcriptText,
+    durationSec: params.durationSec,
+  });
+
+  const teaserDur = 2.5;
+  const startSec = Math.max(1.0, Math.min(Math.max(1.5, params.durationSec - teaserDur - 0.5), arc.climaxSecond));
+  const tmpTeaser = `${params.videoPath}.teaser.mp4`;
+  const tmpCombined = `${params.videoPath}.coldopen.mp4`;
+  const fontFile = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+  const hasFont = fs.existsSync(fontFile);
+  const safeTeaser = arc.teaserText.replace(/['":\\[\]%]/g, '').trim() || 'ADELANTO EXPLOSIVO';
+
+  try {
+    const vfParts = [
+      'eq=contrast=1.12:saturation=1.22',
+      'fade=t=out:st=2.2:d=0.3',
+    ];
+    if (hasFont) {
+      vfParts.push(
+        `drawbox=x=0:y=120:w=iw:h=86:color=black@0.75:t=fill`,
+        `drawtext=fontfile='${fontFile}':text='⚡ ADELANTO • ${safeTeaser}':fontcolor=#FFD43B:fontsize=28:borderw=3:bordercolor=black:x=(w-text_w)/2:y=150`
+      );
+    }
+
+    // 1. Render 2.5s climax teaser
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y',
+        '-ss',
+        String(startSec),
+        '-i',
+        params.videoPath,
+        '-t',
+        String(teaserDur),
+        '-vf',
+        vfParts.join(','),
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-crf',
+        '22',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+        tmpTeaser,
+      ],
+      { stdio: 'ignore', timeout: 30000 }
+    );
+
+    // 2. Concatenate [2.5s Teaser] + [Original Clip] via filter_complex concat
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',
+        tmpTeaser,
+        '-i',
+        params.videoPath,
+        '-filter_complex',
+        '[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]',
+        '-map',
+        '[v]',
+        '-map',
+        '[a]',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-crf',
+        '22',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+        '-movflags',
+        '+faststart',
+        tmpCombined,
+      ],
+      { stdio: 'ignore', timeout: 60000 }
+    );
+
+    if (fs.existsSync(tmpCombined) && fs.statSync(tmpCombined).size > 5000) {
+      fs.copyFileSync(tmpCombined, params.videoPath);
+    }
+
+    const probed = probeMediaWithFfprobe(params.videoPath);
+    return {
+      applied: true,
+      climaxSecond: startSec,
+      teaserText: arc.teaserText,
+      debateCtaQuestion: arc.debateCtaQuestion,
+      newDurationSec: probed.durationSeconds,
+    };
+  } finally {
+    try {
+      if (fs.existsSync(tmpTeaser)) fs.unlinkSync(tmpTeaser);
+      if (fs.existsSync(tmpCombined)) fs.unlinkSync(tmpCombined);
+    } catch {}
+  }
+}
 
 /**
  * Calls xAI Grok API (`grok-4.20-0309-non-reasoning` by default for ultra-fast, low-token cost execution)
@@ -1862,7 +2095,43 @@ Cada elemento del arreglo debe tener:
 - "visualPrompt": descripción visual en inglés que empiece con "${baseCharacterStyle},"
 - "narrationText": descripción breve de la acción física en español (10 a 16 palabras)
 - "cameraMotion": uno de ["ZOOM_IN", "ZOOM_OUT", "PAN_RIGHT", "PAN_LEFT", "PUNCH_SHAKE"]
-- "sfxType": uno de ["EFFORT", "KNOCK", "CLANG", "EXPLOSION", "DOOR_CREAK", "LAUGH"]`;
+- "sfxType": uno de ["EFFORT", 'KNOCK', 'CLANG', 'EXPLOSION', 'DOOR_CREAK', 'LAUGH']`;
+
+    // 1. Try Claude 5.5 (Anthropic) FIRST for elite comedy storytelling & plot twist pacing
+    const claudeRaw = await callClaudeAnthropicAsync({
+      systemPrompt: sysPrompt,
+      userPrompt: `Crea las ${sceneCount} escenas animadas con inicio, escalada cómica y giro inesperado final para esta historia de ${totalDur} segundos: ${params.ideaPrompt}`,
+      maxTokens: 1200,
+    });
+    if (claudeRaw) {
+      const claudeMatch = claudeRaw.match(/\[[\s\S]*\]/);
+      if (claudeMatch) {
+        const parsed = JSON.parse(claudeMatch[0]);
+        if (Array.isArray(parsed) && parsed.length >= 3) {
+          return parsed.slice(0, sceneCount).map((item: any, idx: number) => ({
+            sceneNumber: idx + 1,
+            title: String(item.title || `Escena ${idx + 1}`),
+            actionType: (VALID_STICKMAN_ACTIONS.includes(item.actionType)
+              ? item.actionType
+              : actionSeq[idx % actionSeq.length]) as StickmanActionType,
+            propType,
+            visualPrompt: String(item.visualPrompt || '').includes('stickman')
+              ? String(item.visualPrompt)
+              : `${baseCharacterStyle}, ${String(item.visualPrompt || params.ideaPrompt)}`,
+            narrationText: String(
+              item.narrationText || `En la escena ${idx + 1}, nuestro personaje intenta resolver el problema.`
+            ),
+            cameraMotion: (['ZOOM_IN', 'ZOOM_OUT', 'PAN_RIGHT', 'PAN_LEFT', 'PUNCH_SHAKE'].includes(item.cameraMotion)
+              ? item.cameraMotion
+              : 'ZOOM_IN') as StorySceneSpec['cameraMotion'],
+            sfxType: (['EFFORT', 'KNOCK', 'CLANG', 'EXPLOSION', 'DOOR_CREAK', 'LAUGH'].includes(item.sfxType)
+              ? item.sfxType
+              : 'EFFORT') as StorySceneSpec['sfxType'],
+            durationSec: perSceneDur,
+          }));
+        }
+      }
+    }
 
     const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method: 'POST',

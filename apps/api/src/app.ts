@@ -14,8 +14,11 @@ import {
 } from '@banana/database';
 import { SUBTITLE_TEMPLATES, validateSafeExternalUrl } from '@banana/shared';
 import {
+  analyzeClipArcAndDebateWithClaudeAsync,
+  applyColdOpenToClipWithClaudeAsync,
   applyVoiceDubbingToClipAsync,
   buildPremiereXmlForClip,
+  callClaudeAnthropicAsync,
   callGrokXaiChatAsync,
   captureLiveStreamSegmentAsync,
   computeEmbedding384,
@@ -2822,7 +2825,9 @@ export async function createBananaApiApp(): Promise<Express> {
     let generatedCaption = '';
     let generatedHashtags: string[] = [];
     let generatedXThread: string[] = [];
-    let aiEngineUsed = 'Grok 4.20 (xAI)';
+    let generatedYoutubeChapters: string[] = [];
+    let generatedDebateQuestion = '';
+    let aiEngineUsed = 'Motor Dual: Grok 4.20 + Claude 5.5';
     let bestTimeSlot = '19:30';
 
     const bestTimesByPlatform: Record<string, string> = {
@@ -2840,12 +2845,24 @@ export async function createBananaApiApp(): Promise<Express> {
         ? `You are Grok (xAI), an edgy, razor-sharp viral social media strategist. Write a high-engagement post for ${platform} in English with tone ${tone}. Respond ONLY with valid JSON: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...],"xThread":["1/3 Hook tweet...","2/3 Key breakdown...","3/3 Spicy debate question..."]}`
         : `Eres Grok (xAI), un estratega experto en viralidad de redes sociales con tono directo, magnético y sin relleno corporativo. Redacta un post ultra atractivo para ${platform} en idioma ${language} con tono ${tone}. Responde ÚNICAMENTE con JSON válido: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...],"xThread":["1/3 Tweet gancho explosivo...","2/3 Datos o contexto clave...","3/3 Pregunta polémica de debate..."]}`;
 
-    const grokRaw = await callGrokXaiChatAsync({
-      systemPrompt: grokSysPrompt,
-      userPrompt: `Contexto del video/clip: ${contextText.slice(0, 600)}`,
-      maxTokens: 380,
-      temperature: tone === 'GROK_SPICY' ? 0.85 : 0.7,
-    });
+    const claudeSysPrompt =
+      language === 'en'
+        ? `You are Claude 5.5 (Anthropic), an elite narrative strategist & YouTube SEO director. Given a video topic/transcript, return ONLY valid JSON: {"storyTitle":"...","storyCaption":"...","youtubeChapters":["00:00 Hook & Setup","00:08 Key Revelation","00:16 Final Punchline"],"debateQuestion":"Polarizing question to spark 500+ comments"}`
+        : `Eres Claude 5.5 (Anthropic), director experto en narrativa psicológica, Storytelling y YouTube SEO. Dado el contexto del clip, devuelve ÚNICAMENTE JSON válido: {"storyTitle":"...","storyCaption":"...","youtubeChapters":["00:00 El Gancho Inicial","00:08 La Revelación Clave","00:16 El Remate Final"],"debateQuestion":"Pregunta polarizante imán de comentarios (A vs B)"}`;
+
+    const [grokRaw, claudeRaw] = await Promise.all([
+      callGrokXaiChatAsync({
+        systemPrompt: grokSysPrompt,
+        userPrompt: `Contexto del video/clip: ${contextText.slice(0, 600)}`,
+        maxTokens: 380,
+        temperature: tone === 'GROK_SPICY' ? 0.85 : 0.7,
+      }),
+      callClaudeAnthropicAsync({
+        systemPrompt: claudeSysPrompt,
+        userPrompt: `Contexto del video/clip (${platform}): ${contextText.slice(0, 600)}`,
+        maxTokens: 340,
+      }),
+    ]);
 
     if (grokRaw) {
       try {
@@ -2859,6 +2876,28 @@ export async function createBananaApiApp(): Promise<Express> {
           }
           if (Array.isArray(parsed.xThread)) {
             generatedXThread = parsed.xThread.map((t: any) => String(t).trim()).filter(Boolean);
+          }
+        }
+      } catch {}
+    }
+
+    if (claudeRaw) {
+      try {
+        const cMatch = claudeRaw.match(/\{[\s\S]*\}/);
+        if (cMatch) {
+          const cParsed = JSON.parse(cMatch[0]);
+          if (Array.isArray(cParsed.youtubeChapters)) {
+            generatedYoutubeChapters = cParsed.youtubeChapters.map((c: any) => String(c).trim()).filter(Boolean);
+          }
+          if (cParsed.debateQuestion) {
+            generatedDebateQuestion = String(cParsed.debateQuestion).trim();
+          }
+          if (tone === 'CLAUDE_STORY' || !generatedTitle || !generatedCaption) {
+            if (cParsed.storyTitle) generatedTitle = String(cParsed.storyTitle).trim();
+            if (cParsed.storyCaption) generatedCaption = String(cParsed.storyCaption).trim();
+            if (tone === 'CLAUDE_STORY') {
+              aiEngineUsed = 'Claude 5.5 Storytelling + Grok 4.20';
+            }
           }
         }
       } catch {}
@@ -2952,6 +2991,8 @@ export async function createBananaApiApp(): Promise<Express> {
       caption: generatedCaption,
       hashtags: generatedHashtags,
       xThread: generatedXThread,
+      youtubeChapters: generatedYoutubeChapters,
+      debateQuestion: generatedDebateQuestion,
       aiEngineUsed,
       bestTimeRecommendation: bestTimeSlot,
       platform,
@@ -3075,6 +3116,62 @@ export async function createBananaApiApp(): Promise<Express> {
       dubbed: false,
       message: 'No se pudo aplicar el doblaje neuronal en este momento.',
     });
+  });
+
+  // On-Demand 1-Click "Cold Open / Adelanto Explosivo" directed by Claude 5.5 (Anthropic)
+  router.post('/clips/:id/cold-open', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const clipId = req.params.id;
+      const cRes = await db.query(
+        `SELECT c.*, so."localPath" as "videoLocalPath"
+         FROM "Clip" c
+         LEFT JOIN "StorageObject" so ON so.id = c."storageObjectId"
+         WHERE c.id = $1 LIMIT 1`,
+        [clipId]
+      );
+      if (cRes.rows.length === 0) return res.status(404).json({ error: 'CLIP_NOT_FOUND' });
+      const clip = cRes.rows[0];
+      const videoAbs =
+        clip.videoLocalPath && fs.existsSync(clip.videoLocalPath)
+          ? clip.videoLocalPath
+          : clip.previewPath
+            ? path.join(storageRoot, clip.previewPath)
+            : '';
+      if (!videoAbs || !fs.existsSync(videoAbs)) {
+        return res.status(404).json({ error: 'VIDEO_FILE_NOT_FOUND', message: 'Archivo MP4 del clip no encontrado.' });
+      }
+
+      const result = await applyColdOpenToClipWithClaudeAsync({
+        videoPath: videoAbs,
+        transcriptText: String(clip.summary || clip.title || ''),
+        durationSec: Number(clip.durationSec || 20),
+      });
+
+      await db.query(
+        `UPDATE "Clip" SET "durationSec" = $1, explanation = $2 WHERE id = $3`,
+        [
+          result.newDurationSec,
+          `⚡ Cold Open IA (Claude 5.5): Adelanto de s${result.climaxSecond} ("${result.teaserText}") • Debate: ${result.debateCtaQuestion}`,
+          clipId,
+        ]
+      );
+
+      return res.json({
+        ok: true,
+        clipId,
+        aiEngine: 'Claude Haiku 5.5 (Anthropic)',
+        climaxSecond: result.climaxSecond,
+        teaserText: result.teaserText,
+        debateCtaQuestion: result.debateCtaQuestion,
+        newDurationSec: result.newDurationSec,
+        message: `⚡ Cold Open aplicado con Claude 5.5: se adelantó el clímax del segundo ${result.climaxSecond}s al inicio ("${result.teaserText}").`,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'COLD_OPEN_FAILED',
+        message: err?.message || 'Error al aplicar el Cold Open con Claude 5.5.',
+      });
+    }
   });
 
   // Feature 5: Telegram Bot Direct Push ("Del Servidor a tu Celular en 1 Clic")
