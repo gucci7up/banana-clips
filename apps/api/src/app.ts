@@ -1435,31 +1435,36 @@ export async function createBananaApiApp(): Promise<Express> {
 
   // On-demand 100% AI Viral Thumbnail Generator powered by xAI Grok Imagine (`grok-imagine-image`)
   router.post('/clips/:id/grok-thumbnail', requireAuth, async (req: AuthenticatedRequest, res) => {
-    const clipId = req.params.id;
-    const cRes = await db.query(
-      `SELECT c.*, cs."scoreTotal"
-       FROM "Clip" c
-       LEFT JOIN "ClipScore" cs ON cs."clipId" = c.id
-       WHERE c.id = $1 LIMIT 1`,
-      [clipId]
-    );
-    if (cRes.rows.length === 0) {
-      return res.status(404).json({ error: 'CLIP_NOT_FOUND', message: 'No se encontró el clip solicitado.' });
-    }
-    const clip = cRes.rows[0];
-    const ctRes = await db.query<{ fullText: string }>(
-      `SELECT "fullText" FROM "ClipTranscript" WHERE "clipId" = $1 LIMIT 1`,
-      [clipId]
-    );
-    const contextText = String(
-      req.body?.customPrompt || ctRes.rows[0]?.fullText || clip.summary || clip.title || 'Momento viral en vivo'
-    );
-    const customHeadline = typeof req.body?.headline === 'string' ? req.body.headline.trim() : undefined;
-
-    const grokThumbRel = `banana-thumbnails/grok_thumb_${clip.id}.jpg`;
-    const grokThumbAbs = path.join(storageRoot, grokThumbRel);
-
     try {
+      const clipId = req.params.id;
+      const cRes = await db.query(
+        `SELECT c.*, cs."scoreTotal"
+         FROM "Clip" c
+         LEFT JOIN "ClipScore" cs ON cs."clipId" = c.id
+         WHERE c.id = $1 LIMIT 1`,
+        [clipId]
+      );
+      if (cRes.rows.length === 0) {
+        return res.status(404).json({ error: 'CLIP_NOT_FOUND', message: 'No se encontró el clip solicitado.' });
+      }
+      const clip = cRes.rows[0];
+      const ctRes = await db
+        .query<{ srtContent: string }>(`SELECT "srtContent" FROM "ClipTranscript" WHERE "clipId" = $1 LIMIT 1`, [
+          clipId,
+        ])
+        .catch(() => ({ rows: [] as { srtContent: string }[] }));
+      const rawSrt = String(ctRes.rows[0]?.srtContent || '')
+        .replace(/\d+\r?\n\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}\r?\n/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const contextText = String(
+        req.body?.customPrompt || clip.summary || rawSrt || clip.title || 'Momento viral en vivo'
+      );
+      const customHeadline = typeof req.body?.headline === 'string' ? req.body.headline.trim() : undefined;
+
+      const grokThumbRel = `banana-thumbnails/grok_thumb_${clip.id}.jpg`;
+      const grokThumbAbs = path.join(storageRoot, grokThumbRel);
+
       const generated = await generateViralThumbnailWithGrokImagineAsync({
         transcriptOrTopic: contextText,
         headlineText: customHeadline || clip.title,
