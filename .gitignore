@@ -29,8 +29,8 @@ build/
 # Runtime Local Data & Storage
 .local-data/
 storage-data/
-tmp/
-logs/
+/tmp/
+/logs/
 *.log
 
 # Testing
