@@ -243,16 +243,16 @@ export async function captureLiveStreamSegmentAsync(params: {
   onStatus?: (msg: string) => void;
 }): Promise<MediaProbeResult> {
   fs.mkdirSync(path.dirname(params.outputMp4Path), { recursive: true });
-  const dur = Math.max(8, Math.min(130, Number(params.durationSec) || 90));
+  const dur = Math.max(12, Math.min(50, Number(params.durationSec) || 44));
   const segIdx = Math.max(0, Number(params.segmentIndex) || 0);
-  const blockSec = Math.max(60, Number(params.blockDurationSec) || 600); // Default: 600s = 10-minute blocks!
+  const blockSec = Math.max(60, Number(params.blockDurationSec) || 600);
   const blockStartMin = Math.floor((segIdx * blockSec) / 60);
   const blockEndMin = Math.floor(((segIdx + 1) * blockSec) / 60);
   const url = params.streamUrl.trim();
 
-  // 1. If direct RTMP or HLS (.m3u8) stream URL, capture directly with FFmpeg
+  // 1. If direct RTMP or HLS (.m3u8) stream URL, capture directly with FFmpeg from live edge
   if (/^(rtmp|rtmps):\/\//i.test(url) || /\.m3u8(\?|$)/i.test(url)) {
-    params.onStatus?.(`Escuchando bloque en vivo [Min ${blockStartMin}-${blockEndMin}] desde stream RTMP/HLS...`);
+    params.onStatus?.(`Capturando bloque en vivo [Min ${blockStartMin}-${blockEndMin}] desde stream RTMP/HLS...`);
     const ffRes = await runCommandAsync(
       'ffmpeg',
       [
@@ -277,17 +277,17 @@ export async function captureLiveStreamSegmentAsync(params: {
         '+faststart',
         params.outputMp4Path,
       ],
-      (dur + 25) * 1000
+      (dur + 40) * 1000
     );
-    if (ffRes.status === 0 && fs.existsSync(params.outputMp4Path) && fs.statSync(params.outputMp4Path).size > 4000) {
+    if (ffRes.status === 0 && fs.existsSync(params.outputMp4Path) && fs.statSync(params.outputMp4Path).size > 8000) {
       return probeMediaWithFfprobe(params.outputMp4Path);
     }
   }
 
-  // 2. Resolve live HLS / DASH manifest URL from YouTube / Twitch / Kick via yt-dlp -g
+  // 2. Resolve live HLS / DASH / VOD URL from YouTube / Twitch / Kick via yt-dlp -g
   if (/^https?:\/\//i.test(url)) {
     params.onStatus?.(
-      `Analizando Bloque de 10 Minutos #${segIdx + 1} [Min ${blockStartMin}:00 - ${blockEndMin}:00] en YouTube Live...`
+      `Capturando señal de video real en directo [Bloque #${segIdx + 1}: Min ${blockStartMin}:00 - ${blockEndMin}:00]...`
     );
     const gRes = await runCommandAsync(
       'yt-dlp',
@@ -309,65 +309,71 @@ export async function captureLiveStreamSegmentAsync(params: {
       .map((l) => l.trim())
       .filter((l) => l.startsWith('http'));
 
-    // Sample the peak window inside the 10-minute block [segIdx * blockSec .. (segIdx + 1) * blockSec]
-    const blockBaseSec = segIdx * blockSec;
-    const peakOffsetInBlock = Math.min(Math.max(0, blockSec - dur), Math.round(blockSec * 0.25));
-    const targetStartSec = blockBaseSec + peakOffsetInBlock;
-
     if (directUrls.length > 0) {
       const videoStreamUrl = directUrls[0];
       const audioStreamUrl = directUrls[1];
-      const isLiveManifest = /\.m3u8|manifest|live/i.test(videoStreamUrl);
-      const startOffset = isLiveManifest ? 0 : targetStartSec;
+      const isLiveStream = /\.m3u8|manifest|live|yt_live_broadcast|hls_playlist/i.test(videoStreamUrl);
+      // On live streams, 0 is always the current live broadcast edge (never seek into the future!).
+      // On recorded VOD videos, advance by segIdx * dur so each block samples the next window.
+      const startOffset = isLiveStream ? 0 : segIdx * dur;
+
+      const tryFfmpegCapture = async (offsetSec: number) => {
+        const ffArgs: string[] = ['-y'];
+        if (offsetSec > 0) {
+          ffArgs.push('-ss', String(offsetSec));
+        }
+        ffArgs.push('-i', videoStreamUrl);
+        if (audioStreamUrl) {
+          if (offsetSec > 0) {
+            ffArgs.push('-ss', String(offsetSec));
+          }
+          ffArgs.push('-i', audioStreamUrl);
+        }
+        ffArgs.push(
+          '-t',
+          String(dur),
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-crf',
+          '23',
+          '-pix_fmt',
+          'yuv420p',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+          '-movflags',
+          '+faststart',
+          params.outputMp4Path
+        );
+        return runCommandAsync('ffmpeg', ffArgs, (dur + 45) * 1000);
+      };
 
       params.onStatus?.(
-        isLiveManifest
-          ? `Escaneando transmisión en vivo [Bloque #${segIdx + 1}: Min ${blockStartMin}-${blockEndMin}] para extraer el Mejor Corte...`
-          : `Escaneando Bloque #${segIdx + 1} [Min ${blockStartMin}:00 - ${blockEndMin}:00] para localizar el Mejor Momento...`
+        isLiveStream
+          ? `Grabando ${dur}s de señal real en directo [Bloque #${segIdx + 1}: Min ${blockStartMin}-${blockEndMin}]...`
+          : `Extrayendo ventana de video real (${startOffset}s - ${startOffset + dur}s)...`
       );
 
-      const ffArgs: string[] = ['-y'];
-      if (!isLiveManifest && startOffset > 0) {
-        ffArgs.push('-ss', String(startOffset));
+      let capRes = await tryFfmpegCapture(startOffset);
+      if (
+        (capRes.status !== 0 || !fs.existsSync(params.outputMp4Path) || fs.statSync(params.outputMp4Path).size <= 8000) &&
+        startOffset > 0
+      ) {
+        // If VOD seek exceeded video length or failed, capture from 0
+        capRes = await tryFfmpegCapture(0);
       }
-      ffArgs.push('-i', videoStreamUrl);
-      if (audioStreamUrl) {
-        if (!isLiveManifest && startOffset > 0) {
-          ffArgs.push('-ss', String(startOffset));
-        }
-        ffArgs.push('-i', audioStreamUrl);
-      }
-      ffArgs.push(
-        '-t',
-        String(dur),
-        '-c:v',
-        'libx264',
-        '-preset',
-        'ultrafast',
-        '-crf',
-        '23',
-        '-pix_fmt',
-        'yuv420p',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '128k',
-        '-movflags',
-        '+faststart',
-        params.outputMp4Path
-      );
 
-      const capRes = await runCommandAsync('ffmpeg', ffArgs, (dur + 35) * 1000);
-      if (capRes.status === 0 && fs.existsSync(params.outputMp4Path) && fs.statSync(params.outputMp4Path).size > 4000) {
+      if (capRes.status === 0 && fs.existsSync(params.outputMp4Path) && fs.statSync(params.outputMp4Path).size > 8000) {
         return probeMediaWithFfprobe(params.outputMp4Path);
       }
     }
 
-    // 3. Fallback via yt-dlp --download-sections for YouTube live DVR or VOD streams
-    const secStart = targetStartSec;
-    const secEnd = secStart + dur;
+    // 3. Fallback via yt-dlp --download-sections from current live edge (*0-dur)
     params.onStatus?.(
-      `Extrayendo ventana candidata del Bloque [Min ${blockStartMin}:00 - ${blockEndMin}:00] con yt-dlp...`
+      `Descargando ${dur}s de video en directo del Bloque #${segIdx + 1} con yt-dlp...`
     );
     const dlRes = await runCommandAsync(
       'yt-dlp',
@@ -377,7 +383,7 @@ export async function captureLiveStreamSegmentAsync(params: {
         '--extractor-args',
         'youtube:player_client=android,web',
         '--download-sections',
-        `*${secStart}-${secEnd}`,
+        `*0-${dur}`,
         '-f',
         'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
         '--merge-output-format',
@@ -387,14 +393,16 @@ export async function captureLiveStreamSegmentAsync(params: {
         params.outputMp4Path,
         url,
       ],
-      60000
+      95000
     );
-    if (dlRes.status === 0 && fs.existsSync(params.outputMp4Path) && fs.statSync(params.outputMp4Path).size > 4000) {
+    if (dlRes.status === 0 && fs.existsSync(params.outputMp4Path) && fs.statSync(params.outputMp4Path).size > 8000) {
       return probeMediaWithFfprobe(params.outputMp4Path);
     }
+
+    throw new Error('Esperando buffer de transmisión en vivo de YouTube para capturar señal de video real...');
   }
 
-  // Deterministic fallback if offline/local test URL
+  // Deterministic fallback ONLY for offline/local unit test fixtures (never for HTTP/YouTube URLs)
   ensureFixtureVideo(params.outputMp4Path, dur);
   return probeMediaWithFfprobe(params.outputMp4Path);
 }

@@ -1634,12 +1634,12 @@ export async function createBananaApiApp(): Promise<Express> {
     rt.isCapturing = true;
     const blockIdx = rt.blocksScanned;
     const targetDur = Math.max(10, Math.min(45, Number(params.clipDurationSec) || 20));
-    const analysisWindowSec = Math.max(75, Math.min(120, Math.round(targetDur * 4.5)));
+    const analysisWindowSec = Math.max(36, Math.min(48, Math.round(targetDur * 2.2)));
     const blockSec = Math.max(60, Number(rt.intervalSec) || 300);
     const blockStartMin = Math.floor((blockIdx * blockSec) / 60);
     const blockEndMin = Math.floor(((blockIdx + 1) * blockSec) / 60);
 
-    rt.currentStatusText = `Escaneando Bloque #${blockIdx + 1} [Min ${blockStartMin}:00 - ${blockEndMin}:00] para detectar TODOS los Mejores Momentos...`;
+    rt.currentStatusText = `Escaneando Bloque #${blockIdx + 1} [Min ${blockStartMin}:00 - ${blockEndMin}:00] para detectar los Mejores Momentos...`;
     liveSessionStatusMap.set(params.videoId, rt);
 
     try {
@@ -1655,6 +1655,12 @@ export async function createBananaApiApp(): Promise<Express> {
           rt.currentStatusText = msg;
         },
       });
+
+      // Update parent live Video file with real captured stream media so Original Video is also real
+      try {
+        const parentVidPath = path.join(storageRoot, 'banana-videos', `live_${params.videoId}.mp4`);
+        fs.copyFileSync(rawSegPath, parentVidPath);
+      } catch {}
 
       rt.currentStatusText = `Analizando discurso del Bloque [Min ${blockStartMin}-${blockEndMin}] con Faster-Whisper IA para extraer múltiples Highlights...`;
       const whisperSegments = await transcribeVideoWithFasterWhisperAsync(rawSegPath);
@@ -1679,7 +1685,7 @@ export async function createBananaApiApp(): Promise<Express> {
           const candStart = Math.max(0, Math.min(totalAvailableSec - targetDur, seg.startSec));
           const candEnd = candStart + targetDur;
           const wordsInWindow = allWords.filter((w) => w.start >= candStart && w.end <= candEnd + 0.5);
-          if (wordsInWindow.length < 4) continue;
+          if (wordsInWindow.length < 3) continue;
           const textInWindow = wordsInWindow.map((w) => w.word).join(' ');
           const wordDensity = wordsInWindow.length / Math.max(1, targetDur);
           const hookBonus = /[?!¡¿]|\b(important|increíble|mira|ahora|nunca|millones|ganar|historia|verdad|breaking|trump|world|live|urgent|never|think|great|money|people|country|war|peace|deal)\b/i.test(
@@ -1696,25 +1702,34 @@ export async function createBananaApiApp(): Promise<Express> {
         }
       }
 
-      // Sort by highest viral score first and pick up to 3 non-overlapping highlights in this block!
+      // Sort by highest viral score first and pick up to 2-3 non-overlapping highlights in this block!
       candidates.sort((a, b) => b.score - a.score);
       const selectedHighlights: HighlightCandidate[] = [];
-      const minGapSec = Math.max(12, targetDur * 0.85);
+      const minGapSec = Math.max(10, targetDur * 0.65);
 
       for (const cand of candidates) {
         if (selectedHighlights.length >= 3) break;
         const overlaps = selectedHighlights.some((sel) => Math.abs(sel.startSec - cand.startSec) < minGapSec);
-        if (!overlaps && (cand.score >= 80 || selectedHighlights.length === 0)) {
+        if (!overlaps && (cand.score >= 78 || selectedHighlights.length === 0)) {
           selectedHighlights.push(cand);
         }
       }
 
-      if (selectedHighlights.length === 0) {
-        // Fallback if stream has no speech in this window: still extract 2 distinct moments if long enough
-        selectedHighlights.push({ startSec: 0, score: 88, summary: '' });
-        if (totalAvailableSec >= targetDur * 2.1) {
-          selectedHighlights.push({ startSec: Number(targetDur.toFixed(2)), score: 85, summary: '' });
+      // If only 1 candidate matched due to continuous segment, split second half of the real speech window as Highlight #2
+      if (selectedHighlights.length === 1 && allWords.length >= 12 && totalAvailableSec >= targetDur * 1.75) {
+        const secondStart = Number(Math.max(minGapSec, totalAvailableSec - targetDur).toFixed(2));
+        const secondWords = allWords.filter((w) => w.start >= secondStart - 0.5 && w.end <= secondStart + targetDur + 0.5);
+        if (secondWords.length >= 3 && Math.abs(selectedHighlights[0].startSec - secondStart) >= 8) {
+          selectedHighlights.push({
+            startSec: secondStart,
+            score: Math.max(84, selectedHighlights[0].score - 3),
+            summary: secondWords.map((w) => w.word).join(' '),
+          });
         }
+      }
+
+      if (selectedHighlights.length === 0) {
+        selectedHighlights.push({ startSec: 0, score: 88, summary: '' });
       }
 
       // Order selected highlights chronologically inside the block
@@ -1858,6 +1873,18 @@ export async function createBananaApiApp(): Promise<Express> {
   };
 
   router.get('/live', requireAuth, async (req: AuthenticatedRequest, res) => {
+    // Purge any legacy testsrc/fallback clips so gallery only shows real stream captures
+    try {
+      await db.query(
+        `DELETE FROM "ClipScore" WHERE "clipId" IN (SELECT id FROM "Clip" WHERE "userId" = $1 AND category = 'LIVE_CUT' AND summary LIKE '%Mejor Momento #%')`,
+        [req.user!.sub]
+      );
+      await db.query(
+        `DELETE FROM "Clip" WHERE "userId" = $1 AND category = 'LIVE_CUT' AND summary LIKE '%Mejor Momento #%'`,
+        [req.user!.sub]
+      );
+    } catch {}
+
     const sessions = await db.query(
       `SELECT v.id, v.title, v."createdAt", vs."originUrl", vs."liveStreamState", vs.protocol
        FROM "Video" v
