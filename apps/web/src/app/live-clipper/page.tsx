@@ -120,6 +120,27 @@ export default function LiveClipperPage() {
     }
   };
 
+  const handleGrokThumbnail = async (clipId: string) => {
+    setBusyClipId(clipId);
+    setActionNotice('🎨 Generando Portada Viral 100% IA con Grok Imagine (xAI)... (~7s)');
+    try {
+      const res = await apiFetch<{
+        ok: boolean;
+        headlineUsed: string;
+        downloadUrl: string;
+      }>(`/clips/${clipId}/grok-thumbnail`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setActionNotice(`✅ ¡Portada IA Grok Imagine lista! Titular: "${res.headlineUsed}"`);
+      window.open(res.downloadUrl, '_blank');
+    } catch (err: any) {
+      setActionNotice(`⚠️ ${err?.message || 'Error al generar miniatura con Grok Imagine.'}`);
+    } finally {
+      setBusyClipId(null);
+    }
+  };
+
   const handleCaptureCutNow = async (targetVidId?: string) => {
     const vid = targetVidId || activeVideoId;
     if (!vid) return;
@@ -453,10 +474,19 @@ export default function LiveClipperPage() {
                       <a
                         href={`/api/v1/clips/${c.id}/thumbnail?download=1&regenerate=1`}
                         className="rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:border-[#FFD43B] hover:text-[#FFD43B]"
-                        title="Descargar Portada / Miniatura Viral con Titular Estampado"
+                        title="Descargar Portada Fotograma Real + Titular Grok"
                       >
-                        🖼️ Portada Viral
+                        🖼️ Portada Frame
                       </a>
+                      <button
+                        type="button"
+                        disabled={busyClipId === c.id}
+                        onClick={() => handleGrokThumbnail(c.id)}
+                        className="rounded-lg border border-purple-500/40 bg-purple-500/15 px-2.5 py-1 text-[11px] font-bold text-purple-300 hover:bg-purple-500/25 disabled:opacity-40"
+                        title="Generar Portada 100% IA con Grok Imagine ($0.02)"
+                      >
+                        {busyClipId === c.id ? '⏳ Grok IA...' : '🎨 Portada IA (Grok)'}
+                      </button>
                       <button
                         type="button"
                         disabled={busyClipId === c.id}

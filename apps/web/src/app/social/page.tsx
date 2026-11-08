@@ -41,6 +41,8 @@ export default function SocialPublishingPage() {
   const [scheduledAt, setScheduledAt] = useState('');
 
   const [generatingAi, setGeneratingAi] = useState(false);
+  const [generatingGrokThumb, setGeneratingGrokThumb] = useState(false);
+  const [grokThumbUrl, setGrokThumbUrl] = useState<string | null>(null);
   const [autoScheduling, setAutoScheduling] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [sendingWebhook, setSendingWebhook] = useState(false);
@@ -87,6 +89,29 @@ export default function SocialPublishingPage() {
   }, []);
 
   const selectedClipObj = clips.find((c) => c.id === selectedClipId) || null;
+
+  const handleGenerateGrokThumb = async () => {
+    if (!selectedClipId) return;
+    setGeneratingGrokThumb(true);
+    setNotice('🎨 Generando Portada 100% IA con Grok Imagine (xAI)... espera ~7s...');
+    try {
+      const res = await apiFetch<{
+        ok: boolean;
+        headlineUsed: string;
+        thumbnailUrl: string;
+        downloadUrl: string;
+      }>(`/clips/${selectedClipId}/grok-thumbnail`, {
+        method: 'POST',
+        body: JSON.stringify({ headline: title || undefined, customPrompt: customTopic || undefined }),
+      });
+      setGrokThumbUrl(res.thumbnailUrl);
+      setNotice(`✅ Portada IA generada por Grok Imagine: "${res.headlineUsed}"`);
+    } catch (err: any) {
+      setNotice(`⚠️ ${err?.message || 'Error al generar miniatura con Grok Imagine'}`);
+    } finally {
+      setGeneratingGrokThumb(false);
+    }
+  };
 
   const handleGenerateAiCopy = async () => {
     setGeneratingAi(true);
@@ -400,14 +425,47 @@ export default function SocialPublishingPage() {
             </div>
 
             {selectedClipObj?.signedDownloadUrl && (
-              <div className="rounded-2xl border border-slate-800 bg-[#0B0D12] p-2.5">
-                <video
-                  src={selectedClipObj.signedDownloadUrl}
-                  controls
-                  preload="metadata"
-                  className="h-44 w-full rounded-xl bg-black object-contain"
-                />
-                <div className="mt-2 truncate text-[11px] text-slate-400">
+              <div className="rounded-2xl border border-slate-800 bg-[#0B0D12] p-2.5 space-y-2.5">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <video
+                    src={selectedClipObj.signedDownloadUrl}
+                    controls
+                    preload="metadata"
+                    className="h-44 w-full rounded-xl bg-black object-contain"
+                  />
+                  <div className="flex flex-col items-center justify-center rounded-xl border border-purple-500/30 bg-purple-500/10 p-2.5 text-center">
+                    {grokThumbUrl ? (
+                      <img
+                        src={grokThumbUrl}
+                        alt="Portada IA Grok"
+                        className="h-32 w-auto rounded-lg border border-purple-400/40 object-contain"
+                      />
+                    ) : (
+                      <div className="text-[11px] font-bold text-purple-300">
+                        🎨 Portada Viral 9:16 con Grok Imagine
+                      </div>
+                    )}
+                    <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={generatingGrokThumb}
+                        onClick={handleGenerateGrokThumb}
+                        className="rounded-lg bg-purple-500 px-2.5 py-1 text-[10px] font-black text-white hover:bg-purple-400 disabled:opacity-50"
+                      >
+                        {generatingGrokThumb ? '⏳ Creando con Grok...' : '🎨 Crear Portada IA (Grok)'}
+                      </button>
+                      {grokThumbUrl && (
+                        <a
+                          href={`${grokThumbUrl}&download=1`}
+                          className="rounded-lg border border-purple-400/50 bg-[#0B0D12] px-2.5 py-1 text-[10px] font-bold text-purple-300"
+                        >
+                          ⬇️ JPG
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="truncate text-[11px] text-slate-400">
                   Transcripción detectada: &ldquo;{selectedClipObj.summary || selectedClipObj.title}&rdquo;
                 </div>
               </div>

@@ -1182,17 +1182,23 @@ export async function callGrokXaiChatAsync(params: {
 export async function generateViralHookWithGrokAsync(
   transcriptSnippet: string,
   fallbackTitle: string
-): Promise<{ hookBanner: string; viralTitle: string }> {
+): Promise<{ hookBanner: string; viralTitle: string; hookBannerText: string; clickbaitTitle: string }> {
   const clean = (transcriptSnippet || '').replace(/\s+/g, ' ').trim();
   const defaultWords = (clean || fallbackTitle).replace(/[¿?¡!.,[\]"]/g, '').split(/\s+/).filter(Boolean).slice(0, 6).join(' ');
+  const fallbackHook = defaultWords || 'MOMENTO VIRAL EN DIRECTO';
   if (clean.length < 12) {
-    return { hookBanner: defaultWords || 'MOMENTO VIRAL EN DIRECTO', viralTitle: fallbackTitle };
+    return {
+      hookBanner: fallbackHook,
+      viralTitle: fallbackTitle,
+      hookBannerText: fallbackHook,
+      clickbaitTitle: fallbackTitle,
+    };
   }
 
   const grokOut = await callGrokXaiChatAsync({
     systemPrompt:
       'You are Grok, an elite viral short-form video editor. Given a speech snippet, return ONLY valid JSON: {"hook":"5 TO 6 WORD SPICY UPPERCASE HOOK IN SAME LANGUAGE","title":"Punchy viral title with 1 emoji"}',
-    userPrompt: `Snippet (${ fallbackTitle }): "${clean.slice(0, 320)}"`,
+    userPrompt: `Snippet (${fallbackTitle}): "${clean.slice(0, 320)}"`,
     maxTokens: 90,
     temperature: 0.7,
   });
@@ -1205,13 +1211,176 @@ export async function generateViralHookWithGrokAsync(
         const h = String(parsed.hook || '').replace(/["{}]/g, '').trim().toUpperCase().slice(0, 48);
         const t = String(parsed.title || '').trim().slice(0, 110);
         if (h.length >= 4) {
-          return { hookBanner: h, viralTitle: t || fallbackTitle };
+          return {
+            hookBanner: h,
+            viralTitle: t || fallbackTitle,
+            hookBannerText: h,
+            clickbaitTitle: t || fallbackTitle,
+          };
         }
       }
     } catch {}
   }
 
-  return { hookBanner: defaultWords || 'MOMENTO VIRAL EN DIRECTO', viralTitle: fallbackTitle };
+  return {
+    hookBanner: fallbackHook,
+    viralTitle: fallbackTitle,
+    hookBannerText: fallbackHook,
+    clickbaitTitle: fallbackTitle,
+  };
+}
+
+/**
+ * Generates a 100% AI Viral Cover / Thumbnail using xAI's `grok-imagine-image` model
+ * ($0.02 per image on-demand) combined with Grok 4.20 headline design and FFmpeg 9:16 typography stamping.
+ */
+export async function generateViralThumbnailWithGrokImagineAsync(params: {
+  transcriptOrTopic: string;
+  headlineText?: string;
+  outputThumbPath: string;
+  scoreTotal?: number;
+  xaiApiKey?: string;
+}): Promise<{ success: boolean; thumbnailPath: string; headlineUsed: string; promptUsed: string }> {
+  const apiKey = (params.xaiApiKey || DEFAULT_XAI_GROK_KEY).trim();
+  if (!apiKey) {
+    throw new Error('No se encontró XAI_API_KEY configurada para Grok Imagine.');
+  }
+
+  fs.mkdirSync(path.dirname(params.outputThumbPath), { recursive: true });
+  const contextText = (params.transcriptOrTopic || params.headlineText || 'Momento viral impactante en vivo')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 450);
+
+  let headlineUsed = (params.headlineText || contextText)
+    .replace(/[¿?¡!.,[\]"']/g, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 5)
+    .join(' ')
+    .toUpperCase();
+
+  let imagePrompt = `Vertical 9:16 YouTube Shorts viral thumbnail, hyper-detailed cinematic studio lighting, high contrast neon rim light, dramatic shocked expression, topic: ${contextText.slice(0, 160)}, 8k photorealistic, no blurry text`;
+
+  // 1. Ask Grok 4.20 (text) to craft the punchiest 4-word Spanish cover headline + vivid English scene prompt
+  const promptPlan = await callGrokXaiChatAsync({
+    systemPrompt:
+      'You are Grok Thumbnail Director. Given a video topic/transcript, return ONLY valid JSON: {"headline":"3 TO 5 WORD EXPLOSIVE SPANISH HEADLINE IN UPPERCASE","imagePrompt":"Detailed English visual prompt for a viral YouTube/TikTok thumbnail, dramatic lighting, expressive subject, vibrant colors, 8k photorealistic"}',
+    userPrompt: `Video context: "${contextText}"`,
+    maxTokens: 160,
+    temperature: 0.75,
+    xaiApiKey: apiKey,
+  });
+
+  if (promptPlan) {
+    try {
+      const m = promptPlan.match(/\{[\s\S]*\}/);
+      if (m) {
+        const parsed = JSON.parse(m[0]);
+        if (parsed.headline && String(parsed.headline).trim().length >= 3) {
+          headlineUsed = String(parsed.headline)
+            .replace(/['":\\[\]%]/g, '')
+            .toUpperCase()
+            .trim()
+            .slice(0, 32);
+        }
+        if (parsed.imagePrompt && String(parsed.imagePrompt).trim().length >= 15) {
+          imagePrompt = String(parsed.imagePrompt).trim().slice(0, 600);
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Call xAI Grok Imagine (`grok-imagine-image`)
+  const imgRes = await fetch('https://api.x.ai/v1/images/generations', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'grok-imagine-image',
+      prompt: `${imagePrompt}. Bold viral cover composition, ultra-high contrast, 8k.`,
+      n: 1,
+      response_format: 'url',
+    }),
+    signal: AbortSignal.timeout(35000),
+  });
+
+  if (!imgRes.ok) {
+    const errTxt = await imgRes.text().catch(() => '');
+    throw new Error(`Grok Imagine HTTP ${imgRes.status}: ${errTxt.slice(0, 200)}`);
+  }
+
+  const imgData: any = await imgRes.json();
+  const imageUrl = String(imgData?.data?.[0]?.url || '').trim();
+  if (!imageUrl) {
+    throw new Error('Grok Imagine no devolvió una URL de imagen válida.');
+  }
+
+  const fileRes = await fetch(imageUrl, { signal: AbortSignal.timeout(25000) });
+  if (!fileRes.ok) {
+    throw new Error(`No se pudo descargar la miniatura generada por Grok (${fileRes.status}).`);
+  }
+  const imgBuffer = Buffer.from(await fileRes.arrayBuffer());
+  const rawTempPath = `${params.outputThumbPath}.raw_grok.jpg`;
+  fs.writeFileSync(rawTempPath, imgBuffer);
+
+  // 3. Stamp 9:16 aspect ratio + crisp viral headline banner via FFmpeg
+  const fontFile = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+  if (fs.existsSync(fontFile)) {
+    try {
+      const safeHeadline = headlineUsed.replace(/['":\\[\]%]/g, '').trim().slice(0, 32);
+      const words = safeHeadline.split(/\s+/).filter(Boolean);
+      const mid = Math.ceil(words.length / 2);
+      const line1 = words.slice(0, mid).join(' ') || 'PORTADA IA GROK';
+      const line2 = words.slice(mid).join(' ');
+      const badgeText = `GROK IMAGINE IA  •  SCORE ${params.scoreTotal ?? 96}/100`;
+
+      const vf = [
+        'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280',
+        'eq=contrast=1.08:saturation=1.15',
+        'drawbox=x=0:y=0:w=720:h=150:color=black@0.58:t=fill',
+        'drawbox=x=0:y=940:w=720:h=340:color=black@0.78:t=fill',
+        'drawbox=x=0:y=934:w=720:h=6:color=#FFD43B@0.95:t=fill',
+        `drawtext=fontfile='${fontFile}':text='${badgeText}':fontcolor=#FFD43B:fontsize=25:x=(w-text_w)/2:y=52:box=1:boxcolor=black@0.75:boxborderw=12`,
+        `drawtext=fontfile='${fontFile}':text='${line1}':fontcolor=white:fontsize=46:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1010`,
+        line2
+          ? `drawtext=fontfile='${fontFile}':text='${line2}':fontcolor=#FFD43B:fontsize=48:borderw=4:bordercolor=black:x=(w-text_w)/2:y=1075`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(',');
+
+      execFileSync('ffmpeg', ['-y', '-i', rawTempPath, '-vf', vf, '-frames:v', '1', '-q:v', '2', params.outputThumbPath], {
+        stdio: 'ignore',
+        timeout: 20000,
+      });
+      try {
+        fs.unlinkSync(rawTempPath);
+      } catch {}
+      if (fs.existsSync(params.outputThumbPath) && fs.statSync(params.outputThumbPath).size > 2000) {
+        return {
+          success: true,
+          thumbnailPath: params.outputThumbPath,
+          headlineUsed,
+          promptUsed: imagePrompt,
+        };
+      }
+    } catch {}
+  }
+
+  // Fallback: use the raw Grok Imagine image directly
+  fs.copyFileSync(rawTempPath, params.outputThumbPath);
+  try {
+    fs.unlinkSync(rawTempPath);
+  } catch {}
+  return {
+    success: true,
+    thumbnailPath: params.outputThumbPath,
+    headlineUsed,
+    promptUsed: imagePrompt,
+  };
 }
 
 /**

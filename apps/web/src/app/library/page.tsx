@@ -15,6 +15,31 @@ export default function MediaLibraryPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [minScore, setMinScore] = useState<number>(0);
   const [notice, setNotice] = useState<string>('');
+  const [grokPreviewUrl, setGrokPreviewUrl] = useState<string | null>(null);
+  const [grokBusyClipId, setGrokBusyClipId] = useState<string | null>(null);
+
+  const handleGrokThumbnail = async (clipId: string) => {
+    setGrokBusyClipId(clipId);
+    setNotice('🎨 Generando Portada Viral 100% IA con Grok Imagine (xAI)... espera ~7 segundos...');
+    try {
+      const res = await apiFetch<{
+        ok: boolean;
+        headlineUsed: string;
+        thumbnailUrl: string;
+        downloadUrl: string;
+      }>(`/clips/${clipId}/grok-thumbnail`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setGrokPreviewUrl(res.thumbnailUrl);
+      setNotice(`✅ ¡Portada IA creada con Grok Imagine! Titular: "${res.headlineUsed}" — Descargando...`);
+      window.open(res.downloadUrl, '_blank');
+    } catch (err: any) {
+      setNotice(`⚠️ ${err?.message || 'Error al generar miniatura con Grok Imagine'}`);
+    } finally {
+      setGrokBusyClipId(null);
+    }
+  };
 
   const handleDubClip = async (clipId: string) => {
     setNotice('🗣️ Aplicando Doblaje Neuronal IA al Español con Audio Ducking...');
@@ -137,6 +162,41 @@ export default function MediaLibraryPage() {
         </div>
       )}
 
+      {grokPreviewUrl && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-purple-500/40 bg-purple-500/10 p-4">
+          <div className="flex items-center gap-4">
+            <img
+              src={grokPreviewUrl}
+              alt="Portada IA Grok Imagine"
+              className="h-36 w-20 rounded-xl border border-purple-400/40 object-cover shadow-lg"
+            />
+            <div>
+              <div className="text-xs font-extrabold text-purple-300">
+                🎨 Nueva Portada Viral Generada por Grok Imagine (xAI)
+              </div>
+              <p className="mt-1 text-[11px] text-slate-300">
+                La miniatura 9:16 ya quedó guardada como portada oficial de tu clip y lista para subir a Shorts/TikTok/Reels.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <a
+                  href={`${grokPreviewUrl}&download=1`}
+                  className="rounded-lg bg-purple-500 px-3 py-1.5 text-[11px] font-black text-white hover:bg-purple-400"
+                >
+                  ⬇️ Descargar JPG 9:16
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setGrokPreviewUrl(null)}
+                  className="rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] font-bold text-slate-300"
+                >
+                  Cerrar Vista Previa
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Clips Section */}
       {(tab === 'ALL' || tab === 'CLIPS') && (
         <div className="space-y-3">
@@ -176,9 +236,19 @@ export default function MediaLibraryPage() {
                     <a
                       href={`/api/v1/clips/${c.id}/thumbnail?download=1&regenerate=1`}
                       className="rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:border-[#FFD43B] hover:text-[#FFD43B]"
+                      title="Fotograma real del video + Titular redactado por Grok ($0.0003)"
                     >
-                      🖼️ Portada Viral
+                      🖼️ Portada Frame
                     </a>
+                    <button
+                      type="button"
+                      disabled={grokBusyClipId === c.id}
+                      onClick={() => handleGrokThumbnail(c.id)}
+                      className="rounded-lg border border-purple-500/40 bg-purple-500/15 px-2.5 py-1 text-[11px] font-bold text-purple-300 hover:bg-purple-500/25 disabled:opacity-40"
+                      title="Generar Portada 100% IA con Grok Imagine ($0.02)"
+                    >
+                      {grokBusyClipId === c.id ? '⏳ Grok IA...' : '🎨 Portada IA (Grok)'}
+                    </button>
                     <button
                       type="button"
                       onClick={() => handleDubClip(c.id)}

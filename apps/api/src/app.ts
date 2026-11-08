@@ -26,6 +26,7 @@ import {
   generateStoryboardWithNvidiaNimAsync,
   generateThumbnailFfmpeg,
   generateViralHookWithGrokAsync,
+  generateViralThumbnailWithGrokImagineAsync,
   getStorageRoot,
   onJobProgress,
   probeMediaWithFfprobe,
@@ -1391,16 +1392,25 @@ export async function createBananaApiApp(): Promise<Express> {
 
     const forceRegen = req.query.regenerate === '1' || !fs.existsSync(thumbAbs);
     if (forceRegen && videoAbs && fs.existsSync(videoAbs)) {
-      const customHeadline =
+      let customHeadline =
         typeof req.query.headline === 'string' && req.query.headline.trim()
           ? req.query.headline.trim()
-          : String(clip.summary || clip.title || 'MOMENTO VIRAL')
-              .replace(/🔥|Highlight #\d+|\[Min [^\]]+\]:?/gi, '')
-              .replace(/["«»¿?¡!]/g, '')
-              .trim()
-              .split(/\s+/)
-              .slice(0, 6)
-              .join(' ');
+          : '';
+      if (!customHeadline) {
+        const grokHook = await generateViralHookWithGrokAsync(
+          String(clip.summary || clip.title || ''),
+          String(clip.title || 'MOMENTO VIRAL')
+        ).catch(() => null);
+        customHeadline =
+          grokHook?.hookBanner ||
+          String(clip.summary || clip.title || 'MOMENTO VIRAL')
+            .replace(/🔥|Highlight #\d+|\[Min [^\]]+\]:?/gi, '')
+            .replace(/["«»¿?¡!]/g, '')
+            .trim()
+            .split(/\s+/)
+            .slice(0, 6)
+            .join(' ');
+      }
       generateThumbnailFfmpeg(
         videoAbs,
         thumbAbs,
@@ -1421,6 +1431,60 @@ export async function createBananaApiApp(): Promise<Express> {
       );
     }
     return res.sendFile(thumbAbs);
+  });
+
+  // On-demand 100% AI Viral Thumbnail Generator powered by xAI Grok Imagine (`grok-imagine-image`)
+  router.post('/clips/:id/grok-thumbnail', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const clipId = req.params.id;
+    const cRes = await db.query(
+      `SELECT c.*, cs."scoreTotal"
+       FROM "Clip" c
+       LEFT JOIN "ClipScore" cs ON cs."clipId" = c.id
+       WHERE c.id = $1 LIMIT 1`,
+      [clipId]
+    );
+    if (cRes.rows.length === 0) {
+      return res.status(404).json({ error: 'CLIP_NOT_FOUND', message: 'No se encontró el clip solicitado.' });
+    }
+    const clip = cRes.rows[0];
+    const ctRes = await db.query<{ fullText: string }>(
+      `SELECT "fullText" FROM "ClipTranscript" WHERE "clipId" = $1 LIMIT 1`,
+      [clipId]
+    );
+    const contextText = String(
+      req.body?.customPrompt || ctRes.rows[0]?.fullText || clip.summary || clip.title || 'Momento viral en vivo'
+    );
+    const customHeadline = typeof req.body?.headline === 'string' ? req.body.headline.trim() : undefined;
+
+    const grokThumbRel = `banana-thumbnails/grok_thumb_${clip.id}.jpg`;
+    const grokThumbAbs = path.join(storageRoot, grokThumbRel);
+
+    try {
+      const generated = await generateViralThumbnailWithGrokImagineAsync({
+        transcriptOrTopic: contextText,
+        headlineText: customHeadline || clip.title,
+        outputThumbPath: grokThumbAbs,
+        scoreTotal: Number(clip.scoreTotal || 96),
+      });
+
+      await db.query(`UPDATE "Clip" SET "thumbnailPath" = $1 WHERE id = $2`, [grokThumbRel, clip.id]);
+
+      const ts = Date.now();
+      return res.json({
+        ok: true,
+        clipId: clip.id,
+        aiEngine: 'Grok Imagine (xAI)',
+        headlineUsed: generated.headlineUsed,
+        promptUsed: generated.promptUsed,
+        thumbnailUrl: `/api/v1/clips/${clip.id}/thumbnail?t=${ts}`,
+        downloadUrl: `/api/v1/clips/${clip.id}/thumbnail?download=1&t=${ts}`,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'GROK_THUMBNAIL_FAILED',
+        message: err?.message || 'Error al generar la miniatura con Grok Imagine.',
+      });
+    }
   });
 
   // OpusClip XML Export for Adobe Premiere Pro, DaVinci Resolve & Final Cut Pro
