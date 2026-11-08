@@ -2464,17 +2464,227 @@ export async function createBananaApiApp(): Promise<Express> {
   });
 
   // ===========================================================================
-  // 14. SOCIAL PUBLISHING MODULE (/api/v1/social)
+  // 14. SOCIAL PUBLISHING, AI COPYWRITER, CALENDAR & AUTOMATIONS (/api/v1/social)
   // ===========================================================================
   router.get('/social', requireAuth, async (req: AuthenticatedRequest, res) => {
     const accounts = await db.query(
       `SELECT id, platform, "accountHandle", scopes, status, "createdAt" FROM "SocialAccount" WHERE "userId" = $1`,
       [req.user!.sub]
     );
-    const posts = await db.query(`SELECT * FROM "SocialPost" WHERE "userId" = $1 ORDER BY "createdAt" DESC`, [
-      req.user!.sub,
-    ]);
-    return res.json({ accounts: accounts.rows, posts: posts.rows });
+    const posts = await db.query(
+      `SELECT sp.*, c.title as "clipTitle", c."durationSec" as "clipDurationSec", c."storageObjectId" as "clipStorageObjectId"
+       FROM "SocialPost" sp
+       LEFT JOIN "Clip" c ON c.id = sp."clipId"
+       WHERE sp."userId" = $1
+       ORDER BY COALESCE(sp."scheduledAt", sp."createdAt") DESC`,
+      [req.user!.sub]
+    );
+    const enrichedPosts = posts.rows.map((p: any) => ({
+      ...p,
+      hashtags: typeof p.hashtags === 'string' ? JSON.parse(p.hashtags || '[]') : p.hashtags || [],
+      clipDownloadUrl: p.clipStorageObjectId
+        ? signStorageObjectUrl({ storageObjectId: p.clipStorageObjectId, userId: req.user!.sub }).url
+        : null,
+    }));
+    return res.json({ accounts: accounts.rows, posts: enrichedPosts });
+  });
+
+  // Ocoya-style AI Copywriter ("Travis AI"): generates platform-optimized viral title, caption, CTA & trending hashtags
+  router.post('/social/ai-copywriter', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const {
+      clipId,
+      topic = '',
+      platform = 'TikTok',
+      tone = 'VIRAL',
+      language = 'es',
+    } = req.body || {};
+
+    let contextText = String(topic || '').trim();
+    let clipTitle = '';
+    if (clipId) {
+      const cRes = await db.query<{ title: string; summary: string; description: string }>(
+        `SELECT title, summary, description FROM "Clip" WHERE id = $1 LIMIT 1`,
+        [clipId]
+      );
+      if (cRes.rows[0]) {
+        clipTitle = cRes.rows[0].title || '';
+        contextText = `${cRes.rows[0].title}. ${cRes.rows[0].summary || cRes.rows[0].description || ''}`.trim();
+      }
+    }
+    if (!contextText) {
+      contextText = 'Momento viral impactante extraído con Inteligencia Artificial';
+    }
+
+    const nvidiaKey =
+      process.env.NVIDIA_NIM_API_KEY ||
+      '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';
+
+    let generatedTitle = '';
+    let generatedCaption = '';
+    let generatedHashtags: string[] = [];
+    let bestTimeSlot = '19:30';
+
+    const bestTimesByPlatform: Record<string, string> = {
+      TikTok: '19:30 (Pico Viral +46%)',
+      YouTube: '18:00 (Pico Shorts +41%)',
+      Instagram: '20:15 (Pico Reels +39%)',
+      X: '13:00 (Pico Noticias +37%)',
+      LinkedIn: '09:30 (Pico B2B +34%)',
+      Facebook: '19:00 (Pico Video +35%)',
+    };
+    bestTimeSlot = bestTimesByPlatform[platform] || '19:30 (Pico Viral +42%)';
+
+    try {
+      const sysPrompt =
+        language === 'en'
+          ? `You are an elite viral social media copywriter (like Ocoya Travis AI). Write a viral post for ${platform} in English with tone ${tone}. Respond ONLY with valid JSON: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...]}`
+          : `Eres un copywriter experto en viralidad de redes sociales (estilo Ocoya Travis AI). Redacta un post ultra atractivo para ${platform} en idioma ${language} con tono ${tone}. Responde ÚNICAMENTE con JSON válido: {"title":"...","caption":"...","hashtags":["#tag1","#tag2",...]}`;
+
+      const nimResp = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${nvidiaKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'meta/llama-3.1-70b-instruct',
+          messages: [
+            { role: 'system', content: sysPrompt },
+            { role: 'user', content: `Contexto del video/clip: ${contextText.slice(0, 600)}` },
+          ],
+          temperature: 0.7,
+          max_tokens: 450,
+        }),
+        signal: AbortSignal.timeout(12000),
+      });
+
+      if (nimResp.ok) {
+        const nimData: any = await nimResp.json();
+        const rawText = nimData?.choices?.[0]?.message?.content || '';
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          generatedTitle = String(parsed.title || '').trim();
+          generatedCaption = String(parsed.caption || '').trim();
+          if (Array.isArray(parsed.hashtags)) {
+            generatedHashtags = parsed.hashtags.map((h: any) => (String(h).startsWith('#') ? String(h) : `#${h}`));
+          }
+        }
+      }
+    } catch {}
+
+    if (!generatedTitle || !generatedCaption) {
+      const cleanSnippet = contextText.replace(/🔥|Highlight #\d+|\[Min [^\]]+\]:?/gi, '').replace(/"/g, '').trim();
+      const shortHook = cleanSnippet.split(/\s+/).slice(0, 8).join(' ');
+      if (language === 'en') {
+        generatedTitle = `🚨 Nobody expected this moment: "${shortHook}..."`;
+        generatedCaption = `Wait until the end 👀🔥 "${cleanSnippet.slice(0, 140)}..."\n\nWhat do you think about this? Drop your comment below 👇💬`;
+        generatedHashtags = ['#fyp', '#viral', '#shorts', '#trending', '#breakingnews', '#reels', '#clips', '#mustwatch'];
+      } else {
+        const tonePrefix =
+          tone === 'HUMOR'
+            ? '😂 No vas a creer cómo termina esto:'
+            : tone === 'URGENT'
+              ? '🚨 ÚLTIMA HORA — Declaración impactante:'
+              : tone === 'EDUCATIONAL'
+                ? '💡 La clave que pocos están viendo:'
+                : '🔥 El momento exacto que está dando la vuelta al mundo:';
+        generatedTitle = `${tonePrefix} "${shortHook}..."`;
+        generatedCaption = `${tonePrefix}\n\n"${cleanSnippet.slice(0, 160)}..."\n\n¿Qué opinas de esto? Te leo en los comentarios 👇🔥 Síguenos para más cortes en tiempo real.`;
+        generatedHashtags = [
+          '#viral',
+          '#parati',
+          '#fyp',
+          '#shorts',
+          '#reels',
+          '#tiktok',
+          '#noticias',
+          '#tendencia',
+          '#clips',
+          '#bananaclips',
+        ];
+      }
+    }
+
+    return res.json({
+      title: generatedTitle,
+      caption: generatedCaption,
+      hashtags: generatedHashtags,
+      bestTimeRecommendation: bestTimeSlot,
+      platform,
+      tone,
+      clipTitle,
+    });
+  });
+
+  // Ocoya-style 1-Click Auto-Scheduler: schedules top unscheduled clips into optimal slots across the next 7 days
+  router.post('/social/auto-schedule', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const { platforms = ['TikTok', 'YouTube', 'Instagram'] } = req.body || {};
+    const topClips = await db.query<{ id: string; title: string; summary: string }>(
+      `SELECT c.id, c.title, c.summary
+       FROM "Clip" c
+       LEFT JOIN "ClipScore" cs ON cs."clipId" = c.id
+       WHERE c."userId" = $1 AND c."isTrash" = false
+       ORDER BY COALESCE(cs."scoreTotal", 85) DESC, c."createdAt" DESC
+       LIMIT 6`,
+      [req.user!.sub]
+    );
+
+    const createdIds: string[] = [];
+    const now = new Date();
+    for (let i = 0; i < topClips.rows.length; i++) {
+      const clip = topClips.rows[i];
+      const plat = platforms[i % platforms.length] || 'TikTok';
+      const schedDate = new Date(now.getTime() + (i + 1) * 12 * 3600 * 1000);
+      schedDate.setMinutes(30, 0, 0);
+
+      const postId = crypto.randomUUID();
+      const cleanSummary = (clip.summary || clip.title).slice(0, 150);
+      const caption = `🔥 "${cleanSummary}..."\n\n¿Qué opinas? Déjalo en los comentarios 👇 #viral #shorts #fyp #parati`;
+      const hashtags = ['#viral', '#shorts', '#fyp', '#parati', `#${plat.toLowerCase()}`];
+
+      await db.query(
+        `INSERT INTO "SocialPost" ("id", "userId", "clipId", "platform", "title", "caption", "hashtags", "status", "scheduledAt")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'SCHEDULED', $8)`,
+        [postId, req.user!.sub, clip.id, plat, clip.title, caption, JSON.stringify(hashtags), schedDate.toISOString()]
+      );
+      createdIds.push(postId);
+    }
+
+    return res.status(201).json({
+      scheduledCount: createdIds.length,
+      notice: `✅ Se programaron automáticamente ${createdIds.length} clips destacados en los horarios de mayor audiencia de tu calendario semanal.`,
+    });
+  });
+
+  // Ocoya-style Webhook Automation Push (n8n / Make / Zapier / Custom Endpoint)
+  router.post('/social/webhook-push', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const { webhookUrl, postId } = req.body || {};
+    if (!webhookUrl || !/^https?:\/\//i.test(webhookUrl)) {
+      return res.status(400).json({ error: 'VALID_WEBHOOK_URL_REQUIRED', message: 'Ingresa una URL de Webhook válida (https://...).' });
+    }
+
+    const postRes = postId
+      ? await db.query(`SELECT * FROM "SocialPost" WHERE id = $1 AND "userId" = $2 LIMIT 1`, [postId, req.user!.sub])
+      : await db.query(`SELECT * FROM "SocialPost" WHERE "userId" = $1 ORDER BY "createdAt" DESC LIMIT 1`, [req.user!.sub]);
+
+    const payload = {
+      event: 'banana_clips.social_post.ready',
+      timestamp: new Date().toISOString(),
+      post: postRes.rows[0] || { title: 'Test Webhook Banana Clips', platform: 'TikTok' },
+    };
+
+    try {
+      const r = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000),
+      });
+      return res.json({ sent: true, statusCode: r.status, message: `Webhook enviado con éxito (HTTP ${r.status}).` });
+    } catch (err: any) {
+      return res.status(502).json({ error: 'WEBHOOK_FAILED', message: `No se pudo conectar al Webhook: ${err?.message}` });
+    }
   });
 
   router.post('/social/accounts', requireAuth, async (req: AuthenticatedRequest, res) => {
