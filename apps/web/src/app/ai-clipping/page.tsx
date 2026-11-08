@@ -406,6 +406,16 @@ export default function AiClippingPage() {
     await loadData();
   };
 
+  const handleDeleteClip = async (clipId: string, clipTitle?: string) => {
+    if (!window.confirm(`¿Eliminar permanentemente "${clipTitle || 'este clip'}" y liberar su espacio en disco?`)) return;
+    try {
+      await apiFetch(`/clips/${clipId}`, { method: 'DELETE' });
+      setClips((prev) => prev.filter((c) => c.id !== clipId));
+    } catch (err: any) {
+      alert(err?.message || 'Error al eliminar el clip');
+    }
+  };
+
   const sortedClips = [...clips].sort((a, b) =>
     sortByScore ? (b.scoreTotal ?? 0) - (a.scoreTotal ?? 0) : 0
   );
@@ -1568,6 +1578,14 @@ export default function AiClippingPage() {
                   >
                     <PlusCircle className="h-3.5 w-3.5" />
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteClip(clip.id, clip.title)}
+                    className="flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/15 px-2.5 py-1.5 text-xs font-bold text-red-400 hover:bg-red-500/30"
+                    title="Eliminar clip permanentemente del disco"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                  </button>
                 </div>
               </div>
             ))}

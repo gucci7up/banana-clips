@@ -1198,6 +1198,119 @@ export async function createBananaApiApp(): Promise<Express> {
     });
   });
 
+  // Helper to physically unlink a file on disk and return freed bytes
+  const unlinkFileAndCountBytes = (maybePath?: string | null): number => {
+    if (!maybePath) return 0;
+    try {
+      const abs = path.isAbsolute(maybePath) ? maybePath : path.join(storageRoot, maybePath);
+      if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+        const bytes = fs.statSync(abs).size;
+        fs.unlinkSync(abs);
+        return bytes;
+      }
+    } catch {}
+    return 0;
+  };
+
+  const deleteStorageObjectAndFileAsync = async (storageObjectId?: string | null): Promise<number> => {
+    if (!storageObjectId) return 0;
+    let freed = 0;
+    try {
+      const soRes = await db.query<{ localPath: string; sizeBytes: number }>(
+        `SELECT "localPath", "sizeBytes" FROM "StorageObject" WHERE id = $1 LIMIT 1`,
+        [storageObjectId]
+      );
+      if (soRes.rows[0]) {
+        freed += unlinkFileAndCountBytes(soRes.rows[0].localPath) || Number(soRes.rows[0].sizeBytes || 0);
+      }
+      await db.query(`DELETE FROM "StorageObject" WHERE id = $1`, [storageObjectId]).catch(() => {});
+    } catch {}
+    return freed;
+  };
+
+  // Permanently delete a source Video, all its derived Clips/Scenes/Transcripts, and free disk space
+  router.delete('/videos/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const videoId = req.params.id;
+    const vRes = await db.query<{
+      id: string;
+      userId: string;
+      title: string;
+      storageObjectId: string | null;
+      thumbnailPath: string | null;
+    }>(`SELECT id, "userId", title, "storageObjectId", "thumbnailPath" FROM "Video" WHERE id = $1 LIMIT 1`, [videoId]);
+
+    if (vRes.rows.length === 0) {
+      return res.status(404).json({ error: 'VIDEO_NOT_FOUND', message: 'El video ya no existe.' });
+    }
+    const video = vRes.rows[0];
+    if (video.userId !== req.user!.sub && req.user!.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+
+    // Stop any running live timer if this was a live stream
+    const rt = liveSessionStatusMap.get(videoId);
+    if (rt?.timer) clearInterval(rt.timer);
+    liveSessionStatusMap.delete(videoId);
+
+    let freedBytes = 0;
+    freedBytes += unlinkFileAndCountBytes(video.thumbnailPath);
+
+    // Delete all child clips and their files first
+    const childClips = await db.query<{
+      id: string;
+      storageObjectId: string | null;
+      previewPath: string | null;
+      thumbnailPath: string | null;
+    }>(`SELECT id, "storageObjectId", "previewPath", "thumbnailPath" FROM "Clip" WHERE "videoId" = $1`, [videoId]);
+
+    for (const c of childClips.rows) {
+      freedBytes += unlinkFileAndCountBytes(c.previewPath);
+      freedBytes += unlinkFileAndCountBytes(c.thumbnailPath);
+      freedBytes += unlinkFileAndCountBytes(`banana-thumbnails/grok_thumb_${c.id}.jpg`);
+      freedBytes += await deleteStorageObjectAndFileAsync(c.storageObjectId);
+      await db.query(`DELETE FROM "ClipScore" WHERE "clipId" = $1`, [c.id]).catch(() => {});
+      await db.query(`DELETE FROM "ClipTranscript" WHERE "clipId" = $1`, [c.id]).catch(() => {});
+      await db.query(`DELETE FROM "EditProject" WHERE "clipId" = $1`, [c.id]).catch(() => {});
+      await db.query(`DELETE FROM "MontageItem" WHERE "clipId" = $1`, [c.id]).catch(() => {});
+      await db.query(`DELETE FROM "Export" WHERE "clipId" = $1`, [c.id]).catch(() => {});
+      await db.query(`DELETE FROM "SocialPost" WHERE "clipId" = $1`, [c.id]).catch(() => {});
+      await db.query(`DELETE FROM "Clip" WHERE id = $1`, [c.id]).catch(() => {});
+    }
+
+    // Delete transcripts, scenes, events, jobs, metadata, source, video, and storage object
+    const trRes = await db.query<{ id: string }>(`SELECT id FROM "Transcript" WHERE "videoId" = $1`, [videoId]);
+    for (const t of trRes.rows) {
+      await db.query(`DELETE FROM "TranscriptSegment" WHERE "transcriptId" = $1`, [t.id]).catch(() => {});
+    }
+    await db.query(`DELETE FROM "Transcript" WHERE "videoId" = $1`, [videoId]).catch(() => {});
+    await db.query(`DELETE FROM "Scene" WHERE "videoId" = $1`, [videoId]).catch(() => {});
+    await db.query(`DELETE FROM "VisualEvent" WHERE "videoId" = $1`, [videoId]).catch(() => {});
+    await db.query(`DELETE FROM "AnalysisJob" WHERE "videoId" = $1`, [videoId]).catch(() => {});
+    await db.query(`DELETE FROM "VideoMetadata" WHERE "videoId" = $1`, [videoId]).catch(() => {});
+    await db.query(`DELETE FROM "VideoSource" WHERE "videoId" = $1`, [videoId]).catch(() => {});
+    await db.query(`DELETE FROM "Video" WHERE id = $1`, [videoId]).catch(() => {});
+    freedBytes += await deleteStorageObjectAndFileAsync(video.storageObjectId);
+
+    if (freedBytes > 0) {
+      await db
+        .query(
+          `UPDATE "ResourceUsage"
+           SET "storageBytesUsed" = GREATEST(0, "storageBytesUsed" - $1)
+           WHERE "userId" = $2`,
+          [freedBytes, video.userId]
+        )
+        .catch(() => {});
+    }
+
+    const freedMb = (freedBytes / (1024 * 1024)).toFixed(2);
+    return res.json({
+      deleted: true,
+      id: videoId,
+      freedBytes,
+      message: `🗑️ Video "${video.title}" eliminado del disco (${freedMb} MB liberados).`,
+    });
+  });
+
   // ===========================================================================
   // 7. JOBS & ASYNCHRONOUS AI CLIPPING PIPELINE + SSE STREAM (/api/v1/jobs)
   // ===========================================================================
@@ -1426,19 +1539,13 @@ export async function createBananaApiApp(): Promise<Express> {
           ? req.query.headline.trim()
           : '';
       if (!customHeadline) {
-        const grokHook = await generateViralHookWithGrokAsync(
-          String(clip.summary || clip.title || ''),
-          String(clip.title || 'MOMENTO VIRAL')
-        ).catch(() => null);
-        customHeadline =
-          grokHook?.hookBanner ||
-          String(clip.summary || clip.title || 'MOMENTO VIRAL')
-            .replace(/🔥|Highlight #\d+|\[Min [^\]]+\]:?/gi, '')
-            .replace(/["«»¿?¡!]/g, '')
-            .trim()
-            .split(/\s+/)
-            .slice(0, 6)
-            .join(' ');
+        customHeadline = String(clip.summary || clip.title || 'MOMENTO VIRAL')
+          .replace(/🔥|Highlight #\d+|\[Min [^\]]+\]:?/gi, '')
+          .replace(/["«»¿?¡!]/g, '')
+          .trim()
+          .split(/\s+/)
+          .slice(0, 6)
+          .join(' ');
       }
       generateThumbnailFfmpeg(
         videoAbs,
@@ -1593,6 +1700,115 @@ export async function createBananaApiApp(): Promise<Express> {
           ? signStorageObjectUrl({ storageObjectId: clip.storageObjectId, userId: clip.userId }).url
           : null,
       },
+    });
+  });
+
+  // Toggle favorite on a Clip
+  router.patch('/clips/:id/favorite', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const clipId = req.params.id;
+    const cRes = await db.query<{ id: string; userId: string; isFavorite: boolean }>(
+      `SELECT id, "userId", "isFavorite" FROM "Clip" WHERE id = $1 LIMIT 1`,
+      [clipId]
+    );
+    if (cRes.rows.length === 0) return res.status(404).json({ error: 'CLIP_NOT_FOUND' });
+    const clip = cRes.rows[0];
+    if (clip.userId !== req.user!.sub && req.user!.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+    const nextFav = req.body?.isFavorite !== undefined ? Boolean(req.body.isFavorite) : !clip.isFavorite;
+    await db.query(`UPDATE "Clip" SET "isFavorite" = $1 WHERE id = $2`, [nextFav, clipId]);
+    return res.json({ id: clipId, isFavorite: nextFav });
+  });
+
+  // Permanently delete a Clip (and any linked 60s Story Montage/Video), physically removing MP4 & thumbnails from disk
+  router.delete('/clips/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const clipId = req.params.id;
+    const cRes = await db.query<{
+      id: string;
+      userId: string;
+      videoId: string | null;
+      title: string;
+      category: string | null;
+      storageObjectId: string | null;
+      previewPath: string | null;
+      thumbnailPath: string | null;
+    }>(
+      `SELECT id, "userId", "videoId", title, category, "storageObjectId", "previewPath", "thumbnailPath"
+       FROM "Clip" WHERE id = $1 LIMIT 1`,
+      [clipId]
+    );
+    if (cRes.rows.length === 0) {
+      return res.status(404).json({ error: 'CLIP_NOT_FOUND', message: 'El clip ya fue eliminado.' });
+    }
+    const clip = cRes.rows[0];
+    if (clip.userId !== req.user!.sub && req.user!.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+
+    let freedBytes = 0;
+    freedBytes += unlinkFileAndCountBytes(clip.previewPath);
+    freedBytes += unlinkFileAndCountBytes(clip.thumbnailPath);
+    freedBytes += unlinkFileAndCountBytes(`banana-thumbnails/grok_thumb_${clip.id}.jpg`);
+    freedBytes += unlinkFileAndCountBytes(`banana-clips/subs_${clip.id}.ass`);
+    freedBytes += unlinkFileAndCountBytes(`banana-clips/live_subs_${clip.id}.ass`);
+    freedBytes += unlinkFileAndCountBytes(`banana-clips/claude_sub_${clip.id}.ass`);
+
+    // Delete any Exports created from this clip
+    const expRes = await db.query<{ id: string; storageObjectId: string | null }>(
+      `SELECT id, "storageObjectId" FROM "Export" WHERE "clipId" = $1`,
+      [clipId]
+    );
+    for (const ex of expRes.rows) {
+      freedBytes += await deleteStorageObjectAndFileAsync(ex.storageObjectId);
+    }
+    await db.query(`DELETE FROM "Export" WHERE "clipId" = $1`, [clipId]).catch(() => {});
+
+    // Delete any Montage that points to the same storageObjectId (e.g., 60s Stickman Story)
+    if (clip.storageObjectId) {
+      await db.query(`DELETE FROM "Montage" WHERE "outputStorageId" = $1`, [clip.storageObjectId]).catch(() => {});
+    }
+    await db.query(`DELETE FROM "MontageItem" WHERE "clipId" = $1`, [clipId]).catch(() => {});
+    await db.query(`DELETE FROM "ClipScore" WHERE "clipId" = $1`, [clipId]).catch(() => {});
+    await db.query(`DELETE FROM "ClipTranscript" WHERE "clipId" = $1`, [clipId]).catch(() => {});
+
+    const epRes = await db.query<{ id: string }>(`SELECT id FROM "EditProject" WHERE "clipId" = $1`, [clipId]);
+    for (const ep of epRes.rows) {
+      await db.query(`DELETE FROM "EditOperation" WHERE "editProjectId" = $1`, [ep.id]).catch(() => {});
+    }
+    await db.query(`DELETE FROM "EditProject" WHERE "clipId" = $1`, [clipId]).catch(() => {});
+    await db.query(`DELETE FROM "SocialPost" WHERE "clipId" = $1`, [clipId]).catch(() => {});
+    await db.query(`DELETE FROM "Clip" WHERE id = $1`, [clipId]).catch(() => {});
+
+    // If this was a 60s Story clip whose parent Video uses the exact same storageObjectId, remove that synthetic Video row too
+    if (clip.videoId && (clip.category === 'STORY_60S' || clip.storageObjectId)) {
+      const otherClips = await db.query<{ cnt: string }>(
+        `SELECT COUNT(*)::text as cnt FROM "Clip" WHERE "videoId" = $1`,
+        [clip.videoId]
+      );
+      if (Number(otherClips.rows[0]?.cnt || 0) === 0 && clip.category === 'STORY_60S') {
+        await db.query(`DELETE FROM "Video" WHERE id = $1`, [clip.videoId]).catch(() => {});
+      }
+    }
+
+    freedBytes += await deleteStorageObjectAndFileAsync(clip.storageObjectId);
+
+    if (freedBytes > 0) {
+      await db
+        .query(
+          `UPDATE "ResourceUsage"
+           SET "storageBytesUsed" = GREATEST(0, "storageBytesUsed" - $1)
+           WHERE "userId" = $2`,
+          [freedBytes, clip.userId]
+        )
+        .catch(() => {});
+    }
+
+    const freedMb = (freedBytes / (1024 * 1024)).toFixed(2);
+    return res.json({
+      deleted: true,
+      id: clipId,
+      freedBytes,
+      message: `🗑️ Clip "${clip.title}" eliminado permanentemente (${freedMb} MB liberados en disco).`,
     });
   });
 
@@ -2640,6 +2856,71 @@ export async function createBananaApiApp(): Promise<Express> {
     }
 
     return res.status(201).json({ montageId, name, templateName, status: 'COMPLETED', clipCount: clipIds.length });
+  });
+
+  router.delete('/montages/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const montageId = req.params.id;
+    const mRes = await db.query<{
+      id: string;
+      userId: string;
+      name: string;
+      outputStorageId: string | null;
+    }>(`SELECT id, "userId", name, "outputStorageId" FROM "Montage" WHERE id = $1 LIMIT 1`, [montageId]);
+
+    if (mRes.rows.length === 0) {
+      return res.status(404).json({ error: 'MONTAGE_NOT_FOUND', message: 'La historia o montaje ya fue eliminado.' });
+    }
+    const montage = mRes.rows[0];
+    if (montage.userId !== req.user!.sub && req.user!.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+
+    let freedBytes = 0;
+    await db.query(`DELETE FROM "MontageItem" WHERE "montageId" = $1`, [montageId]).catch(() => {});
+    await db.query(`DELETE FROM "Montage" WHERE id = $1`, [montageId]).catch(() => {});
+
+    // Also delete any Clip/Video linked to the same outputStorageId (e.g., 60s Stickman Story)
+    if (montage.outputStorageId) {
+      const linkedClips = await db.query<{
+        id: string;
+        videoId: string | null;
+        previewPath: string | null;
+        thumbnailPath: string | null;
+      }>(
+        `SELECT id, "videoId", "previewPath", "thumbnailPath" FROM "Clip" WHERE "storageObjectId" = $1`,
+        [montage.outputStorageId]
+      );
+      for (const lc of linkedClips.rows) {
+        freedBytes += unlinkFileAndCountBytes(lc.previewPath);
+        freedBytes += unlinkFileAndCountBytes(lc.thumbnailPath);
+        await db.query(`DELETE FROM "ClipScore" WHERE "clipId" = $1`, [lc.id]).catch(() => {});
+        await db.query(`DELETE FROM "ClipTranscript" WHERE "clipId" = $1`, [lc.id]).catch(() => {});
+        await db.query(`DELETE FROM "Clip" WHERE id = $1`, [lc.id]).catch(() => {});
+        if (lc.videoId) {
+          await db.query(`DELETE FROM "Video" WHERE id = $1`, [lc.videoId]).catch(() => {});
+        }
+      }
+      freedBytes += await deleteStorageObjectAndFileAsync(montage.outputStorageId);
+    }
+
+    if (freedBytes > 0) {
+      await db
+        .query(
+          `UPDATE "ResourceUsage"
+           SET "storageBytesUsed" = GREATEST(0, "storageBytesUsed" - $1)
+           WHERE "userId" = $2`,
+          [freedBytes, montage.userId]
+        )
+        .catch(() => {});
+    }
+
+    const freedMb = (freedBytes / (1024 * 1024)).toFixed(2);
+    return res.json({
+      deleted: true,
+      id: montageId,
+      freedBytes,
+      message: `🗑️ Historia "${montage.name}" eliminada permanentemente (${freedMb} MB liberados).`,
+    });
   });
 
   // ===========================================================================

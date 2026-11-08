@@ -15,6 +15,7 @@ import {
   FolderKanban,
   CheckCircle2,
   Youtube,
+  Trash2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -180,6 +181,31 @@ export default function LiveClipperPage() {
     });
     setLiveState(res.state || 'STOPPED');
     await loadSessions();
+  };
+
+  const handleDeleteLiveClip = async (clipId: string, clipTitle?: string) => {
+    if (!window.confirm(`¿Eliminar permanentemente "${clipTitle || 'este corte'}" del disco?`)) return;
+    setActionNotice('🗑️ Eliminando corte y liberando espacio en disco...');
+    try {
+      const res = await apiFetch<{ message: string }>(`/clips/${clipId}`, { method: 'DELETE' });
+      setLiveClips((prev) => prev.filter((c) => c.id !== clipId));
+      setActionNotice(res.message || '🗑️ Corte eliminado del disco.');
+    } catch (err: any) {
+      setActionNotice(`⚠️ ${err?.message || 'Error al eliminar corte'}`);
+    }
+  };
+
+  const handleDeleteLiveSession = async (videoId: string, sessionTitle?: string) => {
+    if (!window.confirm(`¿Eliminar la sesión "${sessionTitle || 'en vivo'}" y sus cortes del disco?`)) return;
+    setActionNotice('🗑️ Eliminando sesión en vivo y liberando espacio en disco...');
+    try {
+      const res = await apiFetch<{ message: string }>(`/videos/${videoId}`, { method: 'DELETE' });
+      setSessions((prev) => prev.filter((s) => s.id !== videoId));
+      setLiveClips((prev) => prev.filter((c) => c.videoId !== videoId));
+      setActionNotice(res.message || '🗑️ Sesión eliminada.');
+    } catch (err: any) {
+      setActionNotice(`⚠️ ${err?.message || 'Error al eliminar sesión'}`);
+    }
   };
 
   const activeSession = sessions.find((s) => s.id === activeVideoId) || sessions[0];
@@ -417,6 +443,14 @@ export default function LiveClipperPage() {
                         Parar
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteLiveSession(s.id, s.title)}
+                      title="Eliminar sesión y cortes del disco"
+                      className="rounded-lg border border-red-500/40 bg-red-500/15 px-2 py-1.5 text-[11px] font-bold text-red-400 hover:bg-red-500/30"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
               ))}
@@ -533,12 +567,22 @@ export default function LiveClipperPage() {
                     </div>
 
                     <div className="flex items-center justify-between gap-2">
-                      <Link
-                        href={`/editor?clipId=${c.id}`}
-                        className="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-white hover:border-[#FFD43B]"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" /> Editar
-                      </Link>
+                      <div className="flex items-center gap-1.5">
+                        <Link
+                          href={`/editor?clipId=${c.id}`}
+                          className="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-white hover:border-[#FFD43B]"
+                        >
+                          <Edit3 className="h-3.5 w-3.5" /> Editar
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteLiveClip(c.id, c.title)}
+                          className="flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/15 px-2.5 py-1.5 font-bold text-red-400 hover:bg-red-500/30"
+                          title="Eliminar corte permanentemente del disco"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                        </button>
+                      </div>
                       {c.signedDownloadUrl && (
                         <a
                           href={c.signedDownloadUrl}

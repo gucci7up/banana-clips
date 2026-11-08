@@ -16,6 +16,7 @@ import {
   Subtitles,
   KeyRound,
   CheckCircle2,
+  Trash2,
 } from 'lucide-react';
 
 const MONTAGE_TEMPLATES = [
@@ -234,6 +235,19 @@ export default function AiMontagePage() {
     await loadAll();
   };
 
+  const handleDeleteMontage = async (montageId: string, montageName?: string) => {
+    if (!window.confirm(`¿Eliminar permanentemente "${montageName || 'esta historia'}" y liberar su espacio en disco?`)) {
+      return;
+    }
+    try {
+      await apiFetch(`/montages/${montageId}`, { method: 'DELETE' });
+      setMontages((prev) => prev.filter((m) => m.id !== montageId));
+      setClips((prev) => prev.filter((c) => c.title !== montageName));
+    } catch (err: any) {
+      alert(err?.message || 'Error al eliminar la historia.');
+    }
+  };
+
   return (
     <div className="space-y-6 pb-12">
       {/* Header & Mode Switcher */}
@@ -355,16 +369,16 @@ export default function AiMontagePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-[11px] font-semibold text-zinc-400">
-                    Estilo de Animación 2D (Grok 4.20 + Claude 5.5)
+                    Motor de Animación 2D (Modo Ahorro por Defecto)
                   </label>
                   <select
                     value={stylePreset}
                     onChange={(e) => setStylePreset(e.target.value)}
                     className="w-full rounded-xl border border-zinc-700 bg-[#0E1015] px-3 py-2 text-xs font-semibold text-white"
                   >
-                    <option value="CYANIDE_EXPLOSM">🔥 Video Generativo IA (Estilo Flow + Voz Actuada & Lip-Sync Nativo)</option>
-                    <option value="CYANIDE_VECTOR_RIG">🎨 Rig Vectorial 2D 30fps (Lip-Sync por Onda de Audio PCM)</option>
-                    <option value="MINT_DOOR_CLASSIC">🚪 Stickman Clásico (Fondo Menta + Puerta)</option>
+                    <option value="CYANIDE_EXPLOSM">🎨 Rig Vectorial 2D 30fps Cyanide + Lip-Sync PCM ($0 Créditos Grok)</option>
+                    <option value="MINT_DOOR_CLASSIC">🚪 Stickman Clásico 30fps (Fondo Menta + Puerta — $0 Créditos)</option>
+                    <option value="GROK_FLOW_VIDEO">🔥 Video Generativo IA (Grok Imagine Video — Consume créditos Grok)</option>
                   </select>
                 </div>
 
@@ -606,6 +620,47 @@ export default function AiMontagePage() {
                 ))}
               </div>
             </div>
+
+            {montages.length > 0 && (
+              <div className="rounded-3xl border border-zinc-800 bg-[#16181F] p-6 shadow-2xl">
+                <h3 className="mb-3 text-sm font-extrabold text-white">
+                  🎬 Historias 60s Generadas Recientemente ({montages.length})
+                </h3>
+                <div className="space-y-2.5">
+                  {montages.map((m) => (
+                    <div
+                      key={m.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-[#0E1015] p-3 text-xs"
+                    >
+                      <div>
+                        <div className="font-bold text-white">{m.name}</div>
+                        <div className="text-[11px] text-zinc-400">
+                          {m.templateName} • {m.titleOverlay || m.aspectRatio}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {m.signedDownloadUrl && (
+                          <a
+                            href={m.signedDownloadUrl}
+                            download={`${m.name}.mp4`}
+                            className="flex items-center gap-1 rounded-lg bg-[#FFD43B] px-3 py-1.5 font-black text-[#111318]"
+                          >
+                            <Download className="h-3.5 w-3.5" /> Descargar MP4
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMontage(m.id, m.name)}
+                          className="flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-1.5 font-bold text-red-400 hover:bg-red-500/30"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -710,6 +765,13 @@ export default function AiMontagePage() {
                           Descargar MP4
                         </a>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteMontage(m.id, m.name)}
+                        className="flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/15 px-2.5 py-1.5 font-bold text-red-400 hover:bg-red-500/30"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                      </button>
                       <span className="rounded bg-emerald-500/20 px-2.5 py-1 font-bold text-emerald-400">
                         {m.status}
                       </span>

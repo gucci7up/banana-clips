@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/store';
-import { FolderKanban, Film, Scissors, Layers, Download, Edit3, Search, HardDrive } from 'lucide-react';
+import { FolderKanban, Film, Scissors, Layers, Download, Edit3, Search, HardDrive, Trash2, Star } from 'lucide-react';
 
 type LibraryTab = 'ALL' | 'VIDEOS' | 'CLIPS' | 'MONTAGES' | 'FAVORITES' | 'TRASH';
 
@@ -83,6 +83,71 @@ export default function MediaLibraryPage() {
     }
   };
 
+  const handleToggleFavorite = async (clipId: string) => {
+    try {
+      const res = await apiFetch<{ id: string; isFavorite: boolean }>(`/clips/${clipId}/favorite`, {
+        method: 'PATCH',
+        body: JSON.stringify({}),
+      });
+      setClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, isFavorite: res.isFavorite } : c)));
+    } catch {}
+  };
+
+  const handleDeleteClip = async (clipId: string, title?: string) => {
+    if (!window.confirm(`¿Eliminar permanentemente "${title || 'este clip'}" y liberar espacio en el servidor?`)) {
+      return;
+    }
+    setNotice('🗑️ Eliminando clip y liberando espacio en disco...');
+    try {
+      const res = await apiFetch<{ deleted: boolean; message: string }>(`/clips/${clipId}`, {
+        method: 'DELETE',
+      });
+      setClips((prev) => prev.filter((c) => c.id !== clipId));
+      setMontages((prev) => prev.filter((m) => m.name !== title));
+      setNotice(res.message || '🗑️ Clip eliminado permanentemente.');
+    } catch (err: any) {
+      setNotice(`⚠️ ${err?.message || 'Error al eliminar el clip'}`);
+    }
+  };
+
+  const handleDeleteMontage = async (montageId: string, name?: string) => {
+    if (!window.confirm(`¿Eliminar permanentemente la historia "${name || 'seleccionada'}" y su archivo MP4 del disco?`)) {
+      return;
+    }
+    setNotice('🗑️ Eliminando historia y liberando espacio en disco...');
+    try {
+      const res = await apiFetch<{ deleted: boolean; message: string }>(`/montages/${montageId}`, {
+        method: 'DELETE',
+      });
+      setMontages((prev) => prev.filter((m) => m.id !== montageId));
+      setClips((prev) => prev.filter((c) => c.title !== name));
+      setNotice(res.message || '🗑️ Historia eliminada permanentemente.');
+    } catch (err: any) {
+      setNotice(`⚠️ ${err?.message || 'Error al eliminar la historia'}`);
+    }
+  };
+
+  const handleDeleteVideo = async (videoId: string, title?: string) => {
+    if (
+      !window.confirm(
+        `¿Eliminar permanentemente el video original "${title || 'seleccionado'}" y sus cortes asociados del disco?`
+      )
+    ) {
+      return;
+    }
+    setNotice('🗑️ Eliminando video original y liberando espacio en disco...');
+    try {
+      const res = await apiFetch<{ deleted: boolean; message: string }>(`/videos/${videoId}`, {
+        method: 'DELETE',
+      });
+      setVideos((prev) => prev.filter((v) => v.id !== videoId));
+      setClips((prev) => prev.filter((c) => c.videoId !== videoId));
+      setNotice(res.message || '🗑️ Video original eliminado permanentemente.');
+    } catch (err: any) {
+      setNotice(`⚠️ ${err?.message || 'Error al eliminar el video'}`);
+    }
+  };
+
   useEffect(() => {
     Promise.all([
       apiFetch<{ videos: any[] }>('/videos'),
@@ -98,7 +163,8 @@ export default function MediaLibraryPage() {
   const filteredClips = clips.filter(
     (c) =>
       (c.title || '').toLowerCase().includes(searchTerm.toLowerCase()) &&
-      (c.scoreTotal ?? 80) >= minScore
+      (c.scoreTotal ?? 80) >= minScore &&
+      (tab === 'FAVORITES' ? Boolean(c.isFavorite) : true)
   );
 
   const filteredMontages = montages.filter((m) =>
@@ -214,10 +280,12 @@ export default function MediaLibraryPage() {
       )}
 
       {/* Clips Section */}
-      {(tab === 'ALL' || tab === 'CLIPS') && (
+      {(tab === 'ALL' || tab === 'CLIPS' || tab === 'FAVORITES') && (
         <div className="space-y-3">
           <h2 className="text-base font-bold text-[#FFD43B]">
-            Clips Generados, Cortes en Vivo e Historias ({filteredClips.length})
+            {tab === 'FAVORITES'
+              ? `Mis Clips Favoritos (${filteredClips.length})`
+              : `Clips Generados, Cortes en Vivo e Historias (${filteredClips.length})`}
           </h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filteredClips.map((c) => (
@@ -239,9 +307,21 @@ export default function MediaLibraryPage() {
                     <span className="rounded bg-[#FFD43B] px-2 py-0.5 font-black text-[#111318]">
                       Score {c.scoreTotal ?? 85}/100
                     </span>
-                    <span className="text-[#94A3B8]">
-                      {c.category || 'CLIP'} • {c.durationSec}s • {c.aspectRatio}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#94A3B8]">
+                        {c.category || 'CLIP'} • {c.durationSec}s • {c.aspectRatio}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleFavorite(c.id)}
+                        title="Marcar como Favorito"
+                        className={`rounded-lg p-1 transition ${
+                          c.isFavorite ? 'text-[#FFD43B]' : 'text-slate-500 hover:text-[#FFD43B]'
+                        }`}
+                      >
+                        <Star className="h-3.5 w-3.5 fill-current" />
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-2 font-bold text-sm text-white">{c.title}</div>
                   <p className="mt-1 text-xs text-[#94A3B8] line-clamp-2">{c.explanation || c.summary}</p>
@@ -252,7 +332,7 @@ export default function MediaLibraryPage() {
                     <a
                       href={`/api/v1/clips/${c.id}/thumbnail?download=1&regenerate=1`}
                       className="rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:border-[#FFD43B] hover:text-[#FFD43B]"
-                      title="Fotograma real del video + Titular redactado por Grok ($0.0003)"
+                      title="Fotograma real del video + Titular automático ($0.00 créditos)"
                     >
                       🖼️ Portada Frame
                     </a>
@@ -290,19 +370,29 @@ export default function MediaLibraryPage() {
                     </button>
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Link
-                      href={`/editor?clipId=${c.id}`}
-                      className="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-white hover:border-[#FFD43B]"
-                    >
-                      <Edit3 className="h-3.5 w-3.5" /> Editar
-                    </Link>
-                    <a
-                      href={`/api/v1/clips/${c.id}/xml`}
-                      download={`${c.title}.xml`}
-                      className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 font-semibold text-[#FFD43B] hover:border-[#FFD43B]"
-                    >
-                      <Download className="h-3.5 w-3.5" /> XML
-                    </a>
+                    <div className="flex items-center gap-1.5">
+                      <Link
+                        href={`/editor?clipId=${c.id}`}
+                        className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 font-semibold text-white hover:border-[#FFD43B]"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" /> Editar
+                      </Link>
+                      <a
+                        href={`/api/v1/clips/${c.id}/xml`}
+                        download={`${c.title}.xml`}
+                        className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1.5 font-semibold text-[#FFD43B] hover:border-[#FFD43B]"
+                      >
+                        <Download className="h-3.5 w-3.5" /> XML
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteClip(c.id, c.title)}
+                        className="flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/15 px-2.5 py-1.5 font-bold text-red-400 hover:bg-red-500/30"
+                        title="Eliminar clip permanentemente y liberar espacio en disco"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                      </button>
+                    </div>
                     {c.signedDownloadUrl && (
                       <a
                         href={c.signedDownloadUrl}
@@ -346,15 +436,25 @@ export default function MediaLibraryPage() {
                     {m.templateName} • {m.titleOverlay || m.aspectRatio}
                   </div>
                 </div>
-                {m.signedDownloadUrl && (
-                  <a
-                    href={m.signedDownloadUrl}
-                    download={`${m.name}.mp4`}
-                    className="flex items-center justify-center gap-1 rounded-lg bg-[#FFD43B] px-3 py-2 text-xs font-black text-[#111318]"
+                <div className="flex items-center gap-2">
+                  {m.signedDownloadUrl && (
+                    <a
+                      href={m.signedDownloadUrl}
+                      download={`${m.name}.mp4`}
+                      className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-[#FFD43B] px-3 py-2 text-xs font-black text-[#111318]"
+                    >
+                      <Download className="h-3.5 w-3.5" /> Descargar MP4
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMontage(m.id, m.name)}
+                    className="flex items-center justify-center gap-1 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-2 text-xs font-bold text-red-400 hover:bg-red-500/30"
+                    title="Eliminar historia permanentemente del disco"
                   >
-                    <Download className="h-3.5 w-3.5" /> Descargar Historia / Montaje MP4
-                  </a>
-                )}
+                    <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -380,15 +480,25 @@ export default function MediaLibraryPage() {
                 <div className="text-[#94A3B8]">
                   Archivo: {v.originalFilename} • Duración: {v.durationSeconds ?? 24}s • {v.width ?? 1280}x{v.height ?? 720}
                 </div>
-                {v.signedStreamUrl && (
-                  <a
-                    href={v.signedStreamUrl}
-                    download={v.originalFilename}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-[#FFD43B]"
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  {v.signedStreamUrl && (
+                    <a
+                      href={v.signedStreamUrl}
+                      download={v.originalFilename}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 font-semibold text-[#FFD43B] hover:border-[#FFD43B]"
+                    >
+                      <Download className="h-3.5 w-3.5" /> Descargar Original
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteVideo(v.id, v.title)}
+                    className="inline-flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/15 px-3 py-1.5 font-bold text-red-400 hover:bg-red-500/30"
+                    title="Eliminar video original y sus archivos del disco"
                   >
-                    <Download className="h-3.5 w-3.5" /> Descargar Original
-                  </a>
-                )}
+                    <Trash2 className="h-3.5 w-3.5" /> Eliminar Video
+                  </button>
+                </div>
               </div>
             ))}
           </div>

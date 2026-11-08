@@ -1428,17 +1428,46 @@ export async function generateViralHookWithGrokAsync(
     };
   }
 
-  const grokOut = await callGrokXaiChatAsync({
-    systemPrompt:
-      'You are Grok, an elite viral short-form video editor. Given a speech snippet, return ONLY valid JSON: {"hook":"5 TO 6 WORD SPICY UPPERCASE HOOK IN SAME LANGUAGE","title":"Punchy viral title with 1 emoji"}',
-    userPrompt: `Snippet (${fallbackTitle}): "${clean.slice(0, 320)}"`,
+  const hookSysPrompt =
+    'You are an elite viral short-form video editor. Given a speech snippet, return ONLY valid JSON: {"hook":"5 TO 6 WORD SPICY UPPERCASE HOOK IN SAME LANGUAGE","title":"Punchy viral title with 1 emoji"}';
+  const hookUserPrompt = `Snippet (${fallbackTitle}): "${clean.slice(0, 320)}"`;
+
+  // Use Claude 5.5 Haiku first to avoid spending Grok credits on automatic background hooks
+  let llmOut = await callClaudeAnthropicAsync({
+    systemPrompt: hookSysPrompt,
+    userPrompt: hookUserPrompt,
     maxTokens: 90,
-    temperature: 0.7,
   });
 
-  if (grokOut) {
+  if (!llmOut) {
     try {
-      const m = grokOut.match(/\{[\s\S]*\}/);
+      const nimRes = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${DEFAULT_NVIDIA_NIM_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'nvidia/llama-3.1-nemotron-70b-instruct',
+          messages: [
+            { role: 'system', content: hookSysPrompt },
+            { role: 'user', content: hookUserPrompt },
+          ],
+          max_tokens: 90,
+          temperature: 0.65,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (nimRes.ok) {
+        const nimData: any = await nimRes.json();
+        llmOut = String(nimData?.choices?.[0]?.message?.content || '').trim() || null;
+      }
+    } catch {}
+  }
+
+  if (llmOut) {
+    try {
+      const m = llmOut.match(/\{[\s\S]*\}/);
       if (m) {
         const parsed = JSON.parse(m[0]);
         const h = String(parsed.hook || '').replace(/["{}]/g, '').trim().toUpperCase().slice(0, 48);
@@ -1655,16 +1684,15 @@ export async function applyVoiceDubbingToClipAsync(params: {
   const apiKey = (params.nvidiaApiKey || DEFAULT_NVIDIA_NIM_KEY).trim();
 
   let translatedText = cleanSource;
-  // 1. Try Grok xAI first for fast, natural dubbing translation
-  const grokTranslated = await callGrokXaiChatAsync({
+  // 1. Try Claude 5.5 Haiku or Free NVIDIA NIM first to avoid spending Grok credits
+  const claudeTranslated = await callClaudeAnthropicAsync({
     systemPrompt: `Eres un actor de doblaje profesional. Traduce el texto hablado a ${langLabel} manteniendo la intensidad, emoción y ritmo natural para doblaje de voz. Devuelve ÚNICAMENTE el texto traducido sin comillas.`,
     userPrompt: cleanSource.slice(0, 500),
     maxTokens: 220,
-    temperature: 0.35,
   });
 
-  if (grokTranslated && grokTranslated.length > 4) {
-    translatedText = grokTranslated.replace(/^["«*]+|["»*]+$/g, '').trim();
+  if (claudeTranslated && claudeTranslated.length > 4) {
+    translatedText = claudeTranslated.replace(/^["«*]+|["»*]+$/g, '').trim();
   } else {
     try {
       const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
@@ -2485,19 +2513,45 @@ Cada objeto debe tener exactamente estas llaves:
   "sfxType": "EFFORT"
 }`;
 
-    // 1. Try Grok 4.20 FIRST, then Claude 5.5
-    let llmRaw = await callGrokXaiChatAsync({
+    // 1. Try Claude 5.5 Haiku or Free NVIDIA NIM first (0 Grok credits!), then Grok 4.20 as backup
+    let llmRaw = await callClaudeAnthropicAsync({
       systemPrompt: sysPrompt,
       userPrompt: `Historia del usuario (${sceneCount} escenas, ${totalDur}s totales): ${params.ideaPrompt}`,
       maxTokens: 1400,
-      temperature: 0.7,
     });
 
     if (!llmRaw) {
-      llmRaw = await callClaudeAnthropicAsync({
+      try {
+        const nimRes = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'nvidia/llama-3.1-nemotron-70b-instruct',
+            messages: [
+              { role: 'system', content: sysPrompt },
+              { role: 'user', content: `Historia del usuario (${sceneCount} escenas, ${totalDur}s totales): ${params.ideaPrompt}` },
+            ],
+            max_tokens: 1400,
+            temperature: 0.7,
+          }),
+          signal: AbortSignal.timeout(16000),
+        });
+        if (nimRes.ok) {
+          const nimData: any = await nimRes.json();
+          llmRaw = String(nimData?.choices?.[0]?.message?.content || '').trim() || null;
+        }
+      } catch {}
+    }
+
+    if (!llmRaw) {
+      llmRaw = await callGrokXaiChatAsync({
         systemPrompt: sysPrompt,
         userPrompt: `Historia del usuario (${sceneCount} escenas, ${totalDur}s totales): ${params.ideaPrompt}`,
         maxTokens: 1400,
+        temperature: 0.7,
       });
     }
 
@@ -3311,11 +3365,10 @@ export async function render60sStoryVideoFromScenesAsync(params: {
   const useVoice = voice !== 'NONE' && voice !== 'MUTE';
   const defaultActions = defaultActionSequenceForProp('CLIFF_PIANO');
 
-  // Use Generative AI Video (Grok Imagine Video / Flow style with native Spanish acting & lip-sync)
-  // whenever stylePreset is GROK_FLOW_VIDEO or CYANIDE_EXPLOSM (unless classic canvas is explicitly requested)
+  // Only use paid xAI Grok Imagine Video (`grok-imagine-video`) when explicitly selected as `GROK_FLOW_VIDEO`
+  // Default `CYANIDE_EXPLOSM` renders 100% locally at 30fps with PCM RMS Lip-Sync & Free Neural TTS ($0.00 Grok credits)
   const useGenerativeFlowVideo =
-    params.stylePreset !== 'MINT_DOOR_CLASSIC' &&
-    params.stylePreset !== 'CYANIDE_VECTOR_RIG' &&
+    params.stylePreset === 'GROK_FLOW_VIDEO' &&
     voice !== 'NONE';
 
   if (useGenerativeFlowVideo) {
