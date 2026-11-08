@@ -67,14 +67,12 @@ export default function LoginPage() {
             </div>
 
             {/* Official Banana Clips Logo — Centered */}
-            <div className="my-7 flex w-full items-center justify-center">
-              <div className="overflow-hidden rounded-3xl border-2 border-[#FFD43B]/50 bg-white p-3.5 shadow-[0_15px_50px_-10px_rgba(255,212,59,0.45)] transition-transform duration-300 hover:scale-[1.03]">
-                <img
-                  src="/banana-clips-logo.jpg"
-                  alt="Banana Clips Logo"
-                  className="h-40 w-40 object-contain sm:h-48 sm:w-48"
-                />
-              </div>
+            <div className="my-6 flex w-full items-center justify-center">
+              <img
+                src="/banana-clips-logo.png"
+                alt="Banana Clips Logo"
+                className="h-32 w-auto max-w-full object-contain drop-shadow-[0_15px_40px_rgba(255,212,59,0.35)] transition-transform duration-300 hover:scale-[1.03] sm:h-40"
+              />
             </div>
 
             <h1 className="text-2xl font-black tracking-tight text-white sm:text-3xl">

@@ -135,25 +135,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex h-full flex-col">
         {/* Brand Header */}
-        <div className="flex items-center justify-between border-b border-slate-800/80 px-4 py-3.5">
-          <Link href="/dashboard" className="flex items-center gap-3 min-w-0">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[#FFD43B]/50 bg-white p-1 shadow-md shadow-[#FFD43B]/10">
-              <img
-                src="/banana-clips-logo.jpg"
-                alt="Banana Clips Logo"
-                className="h-full w-full object-contain"
-              />
-            </div>
-            {!collapsed && (
-              <div className="min-w-0">
-                <div className="truncate text-sm font-black tracking-wide bg-gradient-to-r from-[#FFD43B] via-[#FFE066] to-[#FFB703] bg-clip-text text-transparent">
-                  BANANA CLIPS
-                </div>
-                <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-                  AI Studio Pro 2.5
-                </div>
-              </div>
-            )}
+        <div className="flex items-center justify-between border-b border-slate-800/80 px-3.5 py-3">
+          <Link href="/dashboard" className="flex items-center justify-center min-w-0">
+            <img
+              src="/banana-clips-logo.png"
+              alt="Banana Clips"
+              className={
+                collapsed
+                  ? 'h-9 w-auto object-contain transition-transform hover:scale-105'
+                  : 'h-12 w-auto max-w-[190px] object-contain drop-shadow-[0_4px_14px_rgba(255,212,59,0.22)] transition-transform hover:scale-[1.02]'
+              }
+            />
           </Link>
 
           {isMobileDrawer ? (
@@ -356,9 +348,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </button>
 
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="flex lg:hidden h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#FFD43B]/40 bg-white p-0.5">
-                <img src="/banana-clips-logo.jpg" alt="Logo" className="h-full w-full object-contain" />
-              </div>
+              <img
+                src="/banana-clips-logo.png"
+                alt="Banana Clips"
+                className="flex lg:hidden h-8 w-auto max-w-[115px] shrink-0 object-contain"
+              />
               <div className="min-w-0">
                 <div className="truncate text-sm sm:text-base font-extrabold text-white">
                   {currentNavItem
