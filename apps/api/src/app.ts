@@ -409,6 +409,184 @@ export async function createBananaApiApp(): Promise<Express> {
     return res.json({ updated: true, mustChangePassword: false, accessToken: updatedToken });
   });
 
+  router.get('/settings/preferences', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const userId = req.user!.sub;
+    const uRes = await db.query<{
+      id: string;
+      username: string;
+      email: string | null;
+      fullName: string;
+      brandKit: any;
+      projectPresets: any;
+    }>(
+      `SELECT id, username, email, "fullName", "brandKit", "projectPresets" FROM "User" WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
+    const tgRes = await db.query<{ valueJson: string }>(
+      `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
+      [`telegram_config_${userId}`]
+    );
+    const aiRes = await db.query<{ valueJson: string }>(
+      `SELECT "valueJson" FROM "SystemSetting" WHERE key = 'ai_config' LIMIT 1`
+    );
+
+    const userRow = uRes.rows[0] || ({} as any);
+    let brandKit = {
+      watermarkText: '',
+      watermarkPosition: 'TOP_RIGHT',
+      watermarkScalePx: 140,
+      ctaOutroEnabled: false,
+      ctaOutroText: 'SÍGUENOS Y COMPARTE PARA MÁS',
+      primaryColor: '#FFD43B',
+      accentColor: '#FF2020',
+      subtitleTemplate: 'Bold',
+      captionPresetId: 'WordCut',
+    };
+    if (userRow.brandKit) {
+      try {
+        const parsed = typeof userRow.brandKit === 'string' ? JSON.parse(userRow.brandKit) : userRow.brandKit;
+        brandKit = { ...brandKit, ...parsed };
+      } catch {}
+    }
+
+    let clipperPresets = {
+      defaultClipDurationSec: 30,
+      defaultMaxClipsCount: 3,
+      defaultAspectRatio: '9:16',
+      defaultSplitScreenMode: 'NONE',
+      defaultFacecamCorner: 'AUTO',
+      defaultSpeechLanguage: 'Spanish',
+      burnSubtitlesByDefault: true,
+      hookBannerByDefault: true,
+      audioEnhancerByDefault: true,
+      speechCleanupByDefault: true,
+      autoColorCorrectionByDefault: true,
+      defaultBackgroundMusic: 'NONE',
+    };
+    if (userRow.projectPresets) {
+      try {
+        const parsed =
+          typeof userRow.projectPresets === 'string' ? JSON.parse(userRow.projectPresets) : userRow.projectPresets;
+        clipperPresets = { ...clipperPresets, ...parsed };
+      } catch {}
+    }
+
+    let telegramConfig = {
+      botToken: '',
+      chatId: '',
+      autoSendLiveClips: true,
+      autoSendAiClips: true,
+      includeViralHashtags: true,
+    };
+    if (tgRes.rows[0]?.valueJson) {
+      try {
+        telegramConfig = { ...telegramConfig, ...JSON.parse(tgRes.rows[0].valueJson) };
+      } catch {}
+    }
+
+    let aiEngineConfig = {
+      primaryBrain: 'CLAUDE_5_5_AND_NIM_FREE',
+      protectGrokCredits: true,
+      whisperModel: 'base',
+      hardwareProfile: 'NVIDIA_LOW_VRAM',
+      hasAnthropicKey: Boolean(process.env.ANTHROPIC_API_KEY),
+      hasNvidiaNimKey: Boolean(process.env.NVIDIA_NIM_API_KEY || true),
+      hasXaiGrokKey: Boolean(process.env.XAI_API_KEY),
+    };
+    if (aiRes.rows[0]?.valueJson) {
+      try {
+        const parsed = typeof aiRes.rows[0].valueJson === 'string' ? JSON.parse(aiRes.rows[0].valueJson) : aiRes.rows[0].valueJson;
+        aiEngineConfig = { ...aiEngineConfig, ...parsed };
+      } catch {}
+    }
+
+    return res.json({
+      profile: {
+        fullName: userRow.fullName || '',
+        username: userRow.username || '',
+        email: userRow.email || '',
+      },
+      brandKit,
+      clipperPresets,
+      telegramConfig,
+      aiEngineConfig,
+    });
+  });
+
+  router.put('/settings/preferences', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const userId = req.user!.sub;
+    const { profile, brandKit, clipperPresets, telegramConfig, aiEngineConfig } = req.body || {};
+
+    if (profile) {
+      await db.query(
+        `UPDATE "User"
+         SET "fullName" = COALESCE($1, "fullName"),
+             email = $2,
+             "updatedAt" = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [profile.fullName ? String(profile.fullName).trim() : null, profile.email ? String(profile.email).trim() : null, userId]
+      );
+    }
+
+    if (brandKit) {
+      await db.query(
+        `UPDATE "User" SET "brandKit" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+        [JSON.stringify(brandKit), userId]
+      );
+    }
+
+    if (clipperPresets) {
+      await db.query(
+        `UPDATE "User" SET "projectPresets" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+        [JSON.stringify(clipperPresets), userId]
+      );
+    }
+
+    if (telegramConfig) {
+      const tgKey = `telegram_config_${userId}`;
+      const tgVal = {
+        botToken: String(telegramConfig.botToken || '').trim(),
+        chatId: String(telegramConfig.chatId || '').trim(),
+        autoSendLiveClips: telegramConfig.autoSendLiveClips !== false,
+        autoSendAiClips: telegramConfig.autoSendAiClips !== false,
+        includeViralHashtags: telegramConfig.includeViralHashtags !== false,
+        updatedAt: new Date().toISOString(),
+      };
+      const exists = await db.query(`SELECT id FROM "SystemSetting" WHERE key = $1 LIMIT 1`, [tgKey]);
+      if (exists.rows.length === 0) {
+        await db.query(
+          `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, $2, $3, $4)`,
+          [crypto.randomUUID(), tgKey, JSON.stringify(tgVal), 'Configuración de Bot de Telegram Directo']
+        );
+      } else {
+        await db.query(
+          `UPDATE "SystemSetting" SET "valueJson" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE key = $2`,
+          [JSON.stringify(tgVal), tgKey]
+        );
+      }
+    }
+
+    if (aiEngineConfig) {
+      const aiExists = await db.query(`SELECT id FROM "SystemSetting" WHERE key = 'ai_config' LIMIT 1`);
+      if (aiExists.rows.length === 0) {
+        await db.query(
+          `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, 'ai_config', $2, $3)`,
+          [crypto.randomUUID(), JSON.stringify(aiEngineConfig), 'Configuración de Motores IA y Ahorro de Créditos']
+        );
+      } else {
+        await db.query(
+          `UPDATE "SystemSetting" SET "valueJson" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE key = 'ai_config'`,
+          [JSON.stringify(aiEngineConfig)]
+        );
+      }
+    }
+
+    return res.json({
+      saved: true,
+      message: '✅ Todas las configuraciones del estudio fueron guardadas correctamente.',
+    });
+  });
+
   // ===========================================================================
   // 2. USER ADMINISTRATION & RESOURCE CONTROL (/api/v1/users & /api/v1/admin)
   // ===========================================================================

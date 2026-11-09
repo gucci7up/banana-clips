@@ -331,6 +331,32 @@ export default function AiClippingPage() {
   useEffect(() => {
     loadData();
     runYouTubeViralRadar('ALL');
+    apiFetch<any>('/settings/preferences')
+      .then((pref) => {
+        if (pref?.clipperPresets) {
+          const cp = pref.clipperPresets;
+          if (cp.defaultClipDurationSec) setTargetDurationSec(Number(cp.defaultClipDurationSec));
+          if (cp.defaultMaxClipsCount) setMaxClipsCount(Number(cp.defaultMaxClipsCount));
+          if (cp.defaultSplitScreenMode) setSplitScreenMode(cp.defaultSplitScreenMode);
+          if (cp.defaultFacecamCorner) setFacecamCorner(cp.defaultFacecamCorner);
+          if (cp.defaultSpeechLanguage) setSpeechLanguage(cp.defaultSpeechLanguage);
+          if (cp.burnSubtitlesByDefault !== undefined) setBurnSubtitles(Boolean(cp.burnSubtitlesByDefault));
+          if (cp.hookBannerByDefault !== undefined) setHookBanner(Boolean(cp.hookBannerByDefault));
+          if (cp.audioEnhancerByDefault !== undefined) setAudioEnhancer(Boolean(cp.audioEnhancerByDefault));
+          if (cp.speechCleanupByDefault !== undefined) setSpeechCleanup(Boolean(cp.speechCleanupByDefault));
+          if (cp.defaultBackgroundMusic) setBackgroundMusicTrack(cp.defaultBackgroundMusic);
+        }
+        if (pref?.brandKit) {
+          const bk = pref.brandKit;
+          if (bk.subtitleTemplate) setSubtitleTemplate(bk.subtitleTemplate);
+          if (bk.watermarkText) {
+            setBrandWatermarkText(bk.watermarkText);
+            setBrandKitMode('CUSTOM');
+          }
+          if (bk.ctaOutroEnabled !== undefined) setCtaOutro(Boolean(bk.ctaOutroEnabled));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const parseTimeSec = (str: string): number => {
