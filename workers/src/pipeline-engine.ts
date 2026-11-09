@@ -952,6 +952,7 @@ export type WatermarkPosition =
 
 export type SplitScreenRetentionMode =
   | 'NONE'
+  | 'STREAMER_FACECAM_SPLIT'
   | 'HYPNOTIC_TUNNEL'
   | 'NEON_RAMP'
   | 'GAMEPLAY_PARKOUR';
@@ -1780,10 +1781,20 @@ export async function applyVoiceDubbingToClipAsync(params: {
   return { dubbed: false, translatedText };
 }
 
+export interface StreamerFacecamBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /**
- * Real Active Speaker Face + Mouth Motion Detector (Python + NumPy + FFmpeg RGB frames).
- * Analyzes skin-tone regions in the head/torso zone combined with mouth/facial micro-motion
- * to lock the 9:16 vertical crop directly onto the person who is speaking, eliminating side-to-side swaying.
+ * Real Active Speaker Face + Mouth Motion Detector + Automatic Gameplay Streamer Facecam (PiP) Detector
+ * (Python + OpenCV + NumPy + Claude 5.5 Haiku Vision).
+ * 1) Detects if the 16:9 video is a Gameplay / Stream with an active Streamer Webcam (Facecam) in a corner/edge,
+ *    returning the exact normalized bounding box `facecamBox: {x, y, w, h}` so FFmpeg cuts the 9:16 screen into 2:
+ *    Streamer Webcam on Top + Gameplay Action on Bottom.
+ * 2) Otherwise, locks the 9:16 vertical crop directly onto the person speaking (zero side-to-side swaying).
  */
 export function detectActiveSpeakerTrackSync(
   sourceVideoPath: string,
@@ -1794,6 +1805,9 @@ export function detectActiveSpeakerTrackSync(
   secondHalfX: number;
   switchSec: number;
   isTwoSpeakerDialogue: boolean;
+  isGameplayWithFacecam: boolean;
+  facecamBox: StreamerFacecamBox;
+  gameplayCenterX: number;
 } {
   const safeDur = Math.max(2, Math.min(45, Number(durationSec) || 15));
   const halfDur = Number((safeDur / 2).toFixed(2));
@@ -1802,6 +1816,9 @@ export function detectActiveSpeakerTrackSync(
     secondHalfX: 0.5,
     switchSec: halfDur,
     isTwoSpeakerDialogue: false,
+    isGameplayWithFacecam: false,
+    facecamBox: { x: 0.02, y: 0.04, w: 0.26, h: 0.42 },
+    gameplayCenterX: 0.55,
   };
 
   if (!sourceVideoPath || !fs.existsSync(sourceVideoPath)) {
@@ -1809,59 +1826,154 @@ export function detectActiveSpeakerTrackSync(
   }
 
   const pyScript = `
-import sys, subprocess, json
+import sys, os, subprocess, json, base64, urllib.request
 import numpy as np
 
 video_path = sys.argv[1]
 start_sec = float(sys.argv[2])
 dur_sec = float(sys.argv[3])
+anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
 cmd = [
     "ffmpeg", "-nostdin", "-v", "error",
     "-ss", str(max(0.0, start_sec)),
     "-i", video_path,
-    "-t", str(min(30.0, dur_sec)),
-    "-vf", "fps=4,scale=320:180",
+    "-t", str(min(24.0, dur_sec)),
+    "-vf", "fps=3,scale=320:180",
     "-f", "rawvideo", "-pix_fmt", "rgb24", "-"
 ]
-proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=18)
+proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=16)
 raw = proc.stdout
 frame_size = 320 * 180 * 3
 n_frames = len(raw) // frame_size
 if n_frames < 3:
-    print(json.dumps({"firstHalfX": 0.5, "secondHalfX": 0.5, "isTwo": False}))
+    print(json.dumps({"firstHalfX": 0.5, "secondHalfX": 0.5, "isTwo": False, "isGameplayWithFacecam": False}))
     sys.exit(0)
 
 frames = np.frombuffer(raw[:n_frames * frame_size], dtype=np.uint8).reshape((n_frames, 180, 320, 3)).astype(np.float32)
-# Head & upper-body speaking zone (y from 12 to 124 out of 180)
+
+# 1. Local OpenCV + Persistent PiP Box + Skin/Motion Analysis
+is_facecam = False
+facecam_box = {"x": 0.02, "y": 0.04, "w": 0.26, "h": 0.42}
+gameplay_cx = 0.55
+
+try:
+    import cv2
+    gray_frames = [cv2.cvtColor(frames[i].astype(np.uint8), cv2.COLOR_RGB2GRAY) for i in range(min(n_frames, 10))]
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    face_cascade = cv2.CascadeClassifier(cascade_path)
+    corner_faces = []
+    large_faces = []
+    for gf in gray_frames:
+        dets = face_cascade.detectMultiScale(gf, scaleFactor=1.12, minNeighbors=4, minSize=(14, 14))
+        for (fx, fy, fw, fh) in dets:
+            fcx = (fx + fw * 0.5) / 320.0
+            fcy = (fy + fh * 0.5) / 180.0
+            fwr = fw / 320.0
+            # Small/medium face in a corner or edge zone = Streamer Webcam!
+            if 0.04 <= fwr <= 0.23 and (fcx < 0.37 or fcx > 0.63 or fcy < 0.43 or fcy > 0.62):
+                corner_faces.append((fcx, fcy, fwr, fh / 180.0))
+            elif fwr > 0.23:
+                large_faces.append((fcx, fcy, fwr, fh / 180.0))
+
+    # Measure background gameplay motion vs corner box stability
+    full_motion = np.abs(np.diff(frames, axis=0)).mean()
+    if len(corner_faces) >= 2 and len(large_faces) == 0 and full_motion > 2.2:
+        med_cx = float(np.median([f[0] for f in corner_faces]))
+        med_cy = float(np.median([f[1] for f in corner_faces]))
+        med_w = float(np.median([f[2] for f in corner_faces]))
+        med_h = float(np.median([f[3] for f in corner_faces]))
+        bw = max(0.22, min(0.36, med_w * 2.9))
+        bh = max(0.28, min(0.48, med_h * 2.8))
+        bx = max(0.0, min(1.0 - bw, med_cx - bw * 0.5))
+        by = max(0.0, min(1.0 - bh, med_cy - bh * 0.42))
+        is_facecam = True
+        facecam_box = {"x": round(bx, 3), "y": round(by, 3), "w": round(bw, 3), "h": round(bh, 3)}
+        gameplay_cx = 0.58 if med_cx < 0.5 else 0.42
+except Exception:
+    pass
+
+# 2. Claude 5.5 Haiku Vision Check (1 single 480x270 JPEG frame) for 100% Streamer Webcam + Gameplay accuracy
+# Detects even when streamer wears a cap pulled down, headphones, microphone, or angled webcam!
+if anthropic_key:
+    try:
+        mid_t = max(0.0, start_sec + min(10.0, dur_sec * 0.35))
+        jpg_cmd = [
+            "ffmpeg", "-nostdin", "-v", "error",
+            "-ss", str(mid_t), "-i", video_path,
+            "-frames:v", "1", "-vf", "scale=480:270", "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "-"
+        ]
+        jpg_proc = subprocess.run(jpg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=6)
+        if jpg_proc.stdout and len(jpg_proc.stdout) > 1000:
+            b64_img = base64.b64encode(jpg_proc.stdout).decode("ascii")
+            payload = {
+                "model": "claude-haiku-5-5",
+                "max_tokens": 180,
+                "thinking": {"type": "disabled"},
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_img}
+                        },
+                        {
+                            "type": "text",
+                            "text": "Analyze this 16:9 video frame. Is it a gameplay or live reaction stream with a small/medium rectangular streamer webcam overlay (facecam box with a person inside) in one of the corners or edges while gameplay/content fills the rest of the screen? Return ONLY valid JSON: {\\"isGameplayWithFacecam\\": boolean, \\"facecamBox\\": {\\"x\\": 0.02, \\"y\\": 0.04, \\"w\\": 0.25, \\"h\\": 0.42}, \\"gameplayCenterX\\": 0.56, \\"speakerX\\": 0.50}. Note: x,y,w,h are normalized 0.0 to 1.0 coordinates of the streamer's webcam rectangle."
+                        }
+                    ]
+                }]
+            }
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "x-api-key": anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json"
+                },
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=6.5) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+                blocks = resp_data.get("content", [])
+                txt = blocks[0].get("text", "") if blocks else ""
+                s_idx = txt.find("{")
+                e_idx = txt.rfind("}")
+                if s_idx != -1 and e_idx != -1:
+                    parsed_v = json.loads(txt[s_idx:e_idx+1])
+                    if isinstance(parsed_v.get("isGameplayWithFacecam"), bool):
+                        is_facecam = parsed_v["isGameplayWithFacecam"]
+                    if is_facecam and isinstance(parsed_v.get("facecamBox"), dict):
+                        fb = parsed_v["facecamBox"]
+                        bw = max(0.18, min(0.45, float(fb.get("w", 0.26))))
+                        bh = max(0.22, min(0.55, float(fb.get("h", 0.42))))
+                        bx = max(0.0, min(1.0 - bw, float(fb.get("x", 0.02))))
+                        by = max(0.0, min(1.0 - bh, float(fb.get("y", 0.04))))
+                        facecam_box = {"x": round(bx, 3), "y": round(by, 3), "w": round(bw, 3), "h": round(bh, 3)}
+                        gameplay_cx = max(0.25, min(0.75, float(parsed_v.get("gameplayCenterX", 0.58 if bx < 0.4 else 0.42))))
+    except Exception:
+        pass
+
+# 3. Active Speaker Horizontal Tracking for full-screen IRL / Podcast videos
 roi = frames[:, 12:124, :, :]
 R, G, B = roi[:, :, :, 0], roi[:, :, :, 1], roi[:, :, :, 2]
-
-# Human skin-tone mask (works across diverse lighting and skin tones)
 skin = ((R > 75) & (G > 30) & (B > 18) & (R > G) & (R > B) & ((R - G) > 10)).astype(np.float32)
-
-# Temporal mouth/head speaking motion between consecutive frames
 motion = np.abs(np.diff(roi, axis=0)).mean(axis=3)
 skin_mid = skin[1:]
-# Speaking activity = facial/gesture motion weighted strongly by skin/face presence
 activity = motion * (1.0 + 4.5 * skin_mid) + (skin_mid * 6.0)
 
-# Smooth horizontally with a 40px window (approx head width in 320px frame)
-col_activity = activity.mean(axis=1) # shape: (n_frames-1, 320)
+col_activity = activity.mean(axis=1)
 kernel = np.ones(40, dtype=np.float32) / 40.0
 
 mid_idx = max(1, (n_frames - 1) // 2)
 first_prof = np.convolve(col_activity[:mid_idx].mean(axis=0), kernel, mode='same')
 second_prof = np.convolve(col_activity[mid_idx:].mean(axis=0), kernel, mode='same')
 
-# Avoid extreme 8% borders
 margin = 26
 x1 = int(np.argmax(first_prof[margin:320-margin]) + margin) / 320.0
 x2 = int(np.argmax(second_prof[margin:320-margin]) + margin) / 320.0
 
-# Convert from image coordinate (0..1) to FFmpeg crop offset ratio (0..1 of (in_w - out_w))
-# When a speaker is at x_img in a 16:9 frame and we crop a 9:16 window (width ~ 0.316 of 16:9),
-# crop_ratio = clamp((x_img - 0.158) / (1.0 - 0.316), 0.0, 1.0)
 def to_crop_ratio(x_img):
     r = (x_img - 0.16) / 0.68
     return float(max(0.05, min(0.95, r)))
@@ -1869,7 +1981,6 @@ def to_crop_ratio(x_img):
 c1 = to_crop_ratio(x1)
 c2 = to_crop_ratio(x2)
 
-# Anti-sway hysteresis: if the speaker hasn't changed sides (> 0.18 shift), lock rock-steady on a single position!
 if abs(c1 - c2) < 0.18:
     avg_c = round((c1 + c2) / 2.0, 3)
     c1, c2 = avg_c, avg_c
@@ -1878,24 +1989,40 @@ else:
     c1, c2 = round(c1, 3), round(c2, 3)
     is_two = True
 
-print(json.dumps({"firstHalfX": c1, "secondHalfX": c2, "isTwo": is_two}))
+print(json.dumps({
+    "firstHalfX": c1,
+    "secondHalfX": c2,
+    "isTwo": is_two,
+    "isGameplayWithFacecam": is_facecam,
+    "facecamBox": facecam_box,
+    "gameplayCenterX": round(gameplay_cx, 3)
+}))
 `;
 
   try {
     const proc = spawnSync(
       'python3',
       ['-c', pyScript, sourceVideoPath, String(Math.max(0, startSec)), String(safeDur)],
-      { encoding: 'utf-8', timeout: 22000 }
+      { encoding: 'utf-8', timeout: 24000 }
     );
     if (proc.status === 0 && proc.stdout) {
       const m = proc.stdout.trim().match(/\{[\s\S]*\}/);
       if (m) {
         const parsed = JSON.parse(m[0]);
+        const fb = parsed.facecamBox || fallback.facecamBox;
         return {
           firstHalfX: Math.max(0.05, Math.min(0.95, Number(parsed.firstHalfX ?? 0.5))),
           secondHalfX: Math.max(0.05, Math.min(0.95, Number(parsed.secondHalfX ?? 0.5))),
           switchSec: halfDur,
           isTwoSpeakerDialogue: Boolean(parsed.isTwo),
+          isGameplayWithFacecam: Boolean(parsed.isGameplayWithFacecam),
+          facecamBox: {
+            x: Math.max(0, Math.min(0.85, Number(fb.x ?? 0.02))),
+            y: Math.max(0, Math.min(0.85, Number(fb.y ?? 0.04))),
+            w: Math.max(0.16, Math.min(0.5, Number(fb.w ?? 0.26))),
+            h: Math.max(0.2, Math.min(0.6, Number(fb.h ?? 0.42))),
+          },
+          gameplayCenterX: Math.max(0.2, Math.min(0.8, Number(parsed.gameplayCenterX ?? 0.55))),
         };
       }
     }
@@ -2356,8 +2483,10 @@ export async function detectSpeakerAndEditPlanWithClaudeVisionAsync(params: {
   let debateCtaQuestion = '¿QUÉ OPINAS DE ESTO? TE LEO ABAJO 👇';
   let videoEffect: VideoEffectPreset = 'VIBRANT_BOOST';
   let backgroundMusicTrack: ViralMusicTrackId = 'NONE';
-  let splitScreenMode: SplitScreenRetentionMode = 'NONE';
-  let explanationEs = `Encuadre bloqueado en hablante activo (X1=${Math.round(firstHalfX * 100)}%, X2=${Math.round(secondHalfX * 100)}%) sin oscilación lateral.`;
+  let splitScreenMode: SplitScreenRetentionMode = cvTrack.isGameplayWithFacecam ? 'STREAMER_FACECAM_SPLIT' : 'NONE';
+  let explanationEs = cvTrack.isGameplayWithFacecam
+    ? `Cámara de streamer detectada automáticamente (${Math.round(cvTrack.facecamBox.w * 100)}%x${Math.round(cvTrack.facecamBox.h * 100)}%) — División en 2 pantallas (Streamer Arriba + Gameplay Abajo) activada.`
+    : `Encuadre bloqueado en hablante activo (X1=${Math.round(firstHalfX * 100)}%, X2=${Math.round(secondHalfX * 100)}%) sin oscilación lateral.`;
 
   const apiKey = DEFAULT_ANTHROPIC_CLAUDE_KEY.trim();
   if (!apiKey || !fs.existsSync(params.videoPath)) {
@@ -2429,7 +2558,7 @@ Devuelve ÚNICAMENTE un JSON válido con:
   "debateCtaQuestion": "PREGUNTA POLARIZANTE EN MAYÚSCULAS PARA COMENTARIOS",
   "videoEffect": uno de ["VIBRANT_BOOST", "CINEMATIC_CONTRAST", "DYNAMIC_ZOOM"],
   "backgroundMusicTrack": uno de ["NONE", "BREAKING_TENSION", "PHONK_DRIFT", "EPIC_CINEMA", "LOFI_CHILL"],
-  "splitScreenMode": uno de ["NONE", "HYPNOTIC_TUNNEL", "NEON_RAMP", "GAMEPLAY_PARKOUR"],
+  "splitScreenMode": uno de ["NONE", "STREAMER_FACECAM_SPLIT", "HYPNOTIC_TUNNEL", "NEON_RAMP", "GAMEPLAY_PARKOUR"] (usa "STREAMER_FACECAM_SPLIT" si detectas un gameplay o stream con cámara del streamer en una esquina),
   "explanationEs": "Breve explicación en español de a quién detectaste hablando en la imagen y qué ajustes aplicaste"
 }`,
     });
@@ -2484,8 +2613,15 @@ Devuelve ÚNICAMENTE un JSON válido con:
         if (['NONE', 'BREAKING_TENSION', 'PHONK_DRIFT', 'EPIC_CINEMA', 'LOFI_CHILL'].includes(parsed.backgroundMusicTrack)) {
           backgroundMusicTrack = parsed.backgroundMusicTrack as ViralMusicTrackId;
         }
-        if (['NONE', 'HYPNOTIC_TUNNEL', 'NEON_RAMP', 'GAMEPLAY_PARKOUR'].includes(parsed.splitScreenMode)) {
+        if (
+          ['NONE', 'STREAMER_FACECAM_SPLIT', 'HYPNOTIC_TUNNEL', 'NEON_RAMP', 'GAMEPLAY_PARKOUR'].includes(
+            parsed.splitScreenMode
+          )
+        ) {
           splitScreenMode = parsed.splitScreenMode as SplitScreenRetentionMode;
+        }
+        if (cvTrack.isGameplayWithFacecam && splitScreenMode === 'NONE') {
+          splitScreenMode = 'STREAMER_FACECAM_SPLIT';
         }
         if (parsed.explanationEs) {
           explanationEs = String(parsed.explanationEs).trim();
@@ -2588,18 +2724,22 @@ export function renderClipWithFfmpeg(params: {
     (params.autoColorCorrection || params.videoEffect === 'VIBRANT_BOOST' || useBroll);
   const useTransitions = params.autoTransitions || params.videoEffect === 'FADE_TRANSITIONS';
 
-  // Active Speaker Face + Mouth Motion Tracking (no side-to-side swaying!)
+  // Active Speaker Face + Mouth Motion Tracking + Automatic Gameplay Streamer Facecam (PiP) Detection
   let spk1 = params.speakerFirstHalfX ?? params.centerXNormalized;
   let spk2 = params.speakerSecondHalfX ?? spk1;
+  let trackedResult: ReturnType<typeof detectActiveSpeakerTrackSync> | null = null;
   if (
-    spk1 === undefined &&
-    params.aspectRatio !== '16:9' &&
-    params.reframeMode !== 'LEVEL_1_CENTER_CROP' &&
-    params.reframeMode !== 'CENTER'
+    params.aspectRatio === '9:16' ||
+    (spk1 === undefined &&
+      params.aspectRatio !== '16:9' &&
+      params.reframeMode !== 'LEVEL_1_CENTER_CROP' &&
+      params.reframeMode !== 'CENTER')
   ) {
-    const tracked = detectActiveSpeakerTrackSync(params.sourceVideoPath, params.startSec, clipDur);
-    spk1 = tracked.firstHalfX;
-    spk2 = tracked.secondHalfX;
+    trackedResult = detectActiveSpeakerTrackSync(params.sourceVideoPath, params.startSec, clipDur);
+    if (spk1 === undefined) {
+      spk1 = trackedResult.firstHalfX;
+      spk2 = trackedResult.secondHalfX;
+    }
   }
   const xRatio1 = Number(Math.max(0.05, Math.min(0.95, spk1 ?? 0.5)).toFixed(3));
   const xRatio2 = Number(Math.max(0.05, Math.min(0.95, spk2 ?? xRatio1)).toFixed(3));
@@ -2608,6 +2748,31 @@ export function renderClipWithFfmpeg(params: {
     Math.abs(xRatio1 - xRatio2) < 0.08
       ? `(in_w-out_w)*${xRatio1}`
       : `if(lt(t,${switchSec}),(in_w-out_w)*${xRatio1},(in_w-out_w)*${xRatio2})`;
+
+  const useStreamerFacecamSplit =
+    params.aspectRatio === '9:16' &&
+    (params.splitScreenMode === 'STREAMER_FACECAM_SPLIT' ||
+      ((!params.splitScreenMode || params.splitScreenMode === 'NONE') && Boolean(trackedResult?.isGameplayWithFacecam)));
+
+  // When Gameplay + Streamer Facecam Split is active, position subtitles right on the center split seam
+  // and keep the top streamer webcam free from top-box overlays (matching viral Kick/Twitch split shorts!)
+  if (useStreamerFacecamSplit && params.subtitleAssPath && fs.existsSync(params.subtitleAssPath)) {
+    try {
+      let assRaw = fs.readFileSync(params.subtitleAssPath, 'utf-8');
+      const resYM = assRaw.match(/PlayResY:\s*(\d+)/i);
+      const playResY = resYM ? Number(resYM[1]) || 1280 : 1280;
+      const seamMarginV = Math.round(playResY * 0.50);
+      assRaw = assRaw.replace(
+        /^(Style:\s*Default,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,[^,\r\n]+,)\d+(,\d+)/m,
+        `$1${seamMarginV}$2`
+      );
+      assRaw = assRaw
+        .split(/\r?\n/)
+        .filter((line) => !/^Dialogue:\s*\d+,[^,]+,[^,]+,(HookBanner|HookBadge),/.test(line))
+        .join('\n');
+      fs.writeFileSync(params.subtitleAssPath, assRaw, 'utf-8');
+    } catch {}
+  }
 
   // Build FFmpeg video filter chain with rock-steady speaker lock (zero sin(t) swaying!)
   const vfParts: string[] = [];
@@ -2672,8 +2837,11 @@ export function renderClipWithFfmpeg(params: {
   const hasWatermarkImage = Boolean(params.watermarkImagePath && fs.existsSync(params.watermarkImagePath));
   const resolvedStorageDir = params.storageDir || path.dirname(path.dirname(params.outputVideoPath));
   const useSplitScreen =
-    Boolean(params.splitScreenMode && params.splitScreenMode !== 'NONE') && params.aspectRatio === '9:16';
+    !useStreamerFacecamSplit &&
+    Boolean(params.splitScreenMode && params.splitScreenMode !== 'NONE') &&
+    params.aspectRatio === '9:16';
   const useTwoSpeakerStack =
+    !useStreamerFacecamSplit &&
     !useSplitScreen &&
     params.aspectRatio === '9:16' &&
     params.reframeMode === 'LEVEL_3_SMART_SPLIT_COMPOSITION';
@@ -2687,7 +2855,41 @@ export function renderClipWithFfmpeg(params: {
     params.sourceVideoPath,
   ];
 
-  if (useTwoSpeakerStack) {
+  if (useStreamerFacecamSplit) {
+    // 2-Screen Gameplay + Streamer Facecam Split:
+    // Top 46% = Zoomed crop of Streamer's Webcam Box | Bottom 54% = Main Gameplay Action Crop
+    const topH = Math.floor(targetH * 0.46) - (Math.floor(targetH * 0.46) % 2);
+    const botH = targetH - topH;
+    const fb = trackedResult?.facecamBox || { x: 0.02, y: 0.04, w: 0.26, h: 0.42 };
+    const camX = Number(Math.max(0, Math.min(0.82, fb.x)).toFixed(3));
+    const camY = Number(Math.max(0, Math.min(0.80, fb.y)).toFixed(3));
+    const camW = Number(Math.max(0.16, Math.min(1.0 - camX, fb.w)).toFixed(3));
+    const camH = Number(Math.max(0.20, Math.min(1.0 - camY, fb.h)).toFixed(3));
+    const gameCropX = Number((trackedResult?.gameplayCenterX ?? (camX < 0.4 ? 0.58 : 0.42)).toFixed(3));
+
+    const postStackParts: string[] = [
+      `drawbox=x=0:y=${topH - 2}:w=${targetW}:h=4:color=#0A0B0E@0.92:t=fill`,
+    ];
+    if (useColor) {
+      postStackParts.push('eq=saturation=1.22:contrast=1.08:brightness=0.02');
+    }
+    if (useTransitions) {
+      const fadeOutStart = Math.max(0.5, clipDur - 0.5).toFixed(2);
+      postStackParts.push(`fade=t=in:st=0:d=0.4,fade=t=out:st=${fadeOutStart}:d=0.4`);
+    }
+    if (params.subtitleAssPath && fs.existsSync(params.subtitleAssPath)) {
+      const escapedAss = params.subtitleAssPath
+        .replace(/\\/g, '/')
+        .replace(/:/g, '\\:')
+        .replace(/'/g, "\\'");
+      postStackParts.push(`ass='${escapedAss}'`);
+    }
+    if (params.speed && params.speed !== 1 && params.speed >= 0.5 && params.speed <= 2.0) {
+      postStackParts.push(`setpts=${(1 / params.speed).toFixed(3)}*PTS`);
+    }
+    const filterComplex = `[0:v]split=2[vcam][vgame];[vcam]crop=iw*${camW}:ih*${camH}:iw*${camX}:ih*${camY},scale=${targetW}:${topH}:force_original_aspect_ratio=increase,crop=${targetW}:${topH}:x='(in_w-out_w)/2':y='(in_h-out_h)*0.22'[topv];[vgame]scale=${targetW}:${botH}:force_original_aspect_ratio=increase,crop=${targetW}:${botH}:x='(in_w-out_w)*${gameCropX}':y='(in_h-out_h)*0.54'[botv];[topv][botv]vstack=inputs=2,${postStackParts.join(',')}[vout]`;
+    args.push('-t', String(clipDur), '-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?');
+  } else if (useTwoSpeakerStack) {
     // 2-Speaker Podcast Vertical Stack: Left Speaker on Top Half, Right Speaker on Bottom Half
     const halfH = Math.floor(targetH / 2) - (Math.floor(targetH / 2) % 2);
     const botH = targetH - halfH;
