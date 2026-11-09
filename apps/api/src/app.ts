@@ -2229,41 +2229,85 @@ export async function createBananaApiApp(): Promise<Express> {
 
     const hashtagsArr =
       typeof clip.hashtags === 'string' ? JSON.parse(clip.hashtags || '[]') : clip.hashtags || ['#viral', '#shorts'];
-    const caption = `🍌 *BANANA CLIPS AI STUDIO*\n🔥 *${clip.title}*\n⭐ Score Viral: ${clip.scoreTotal || 95}/100\n\n"${String(clip.summary || '').slice(0, 220)}"\n\n${hashtagsArr.join(' ')}`;
+    const caption = `🍌 BANANA CLIPS AI STUDIO\n🔥 ${clip.title}\n⭐ Score Viral: ${clip.scoreTotal || 95}/100\n\n"${String(clip.summary || '').slice(0, 220)}"\n\n${hashtagsArr.join(' ')}`;
 
     try {
-      if (videoAbs && fs.existsSync(videoAbs) && fs.statSync(videoAbs).size < 48 * 1024 * 1024) {
-        const fileBuf = fs.readFileSync(videoAbs);
-        const form = new FormData();
-        form.append('chat_id', chatId);
-        form.append('caption', caption);
-        form.append('video', new Blob([fileBuf], { type: 'video/mp4' }), `clip_${clip.id.slice(0, 8)}.mp4`);
+      // 1. First verify the Bot Token via getMe so invalid tokens fail in <1s instead of uploading a large MP4
+      const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(8000),
+      });
+      const meData: any = await meRes.json().catch(() => ({}));
+      if (!meRes.ok || !meData?.ok) {
+        return {
+          ok: false,
+          message: `Token de Bot de Telegram inválido o revocado (${meData?.description || '401 Unauthorized'}). Abre @BotFather en Telegram, escribe /token o /newbot y pega el token exacto.`,
+        };
+      }
+      const botUsername = meData?.result?.username ? `@${meData.result.username}` : 'tu Bot';
 
-        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
-          method: 'POST',
-          body: form,
-          signal: AbortSignal.timeout(45000),
+      // 2. Send MP4 video via curl multipart upload (avoids Node fetch FormData ECONNRESET & Next.js rewrite timeout)
+      if (videoAbs && fs.existsSync(videoAbs) && fs.statSync(videoAbs).size < 49 * 1024 * 1024) {
+        const curlOut = await new Promise<string>((resolve, reject) => {
+          const child = spawn('curl', [
+            '-sS',
+            '--max-time',
+            '45',
+            '-X',
+            'POST',
+            `https://api.telegram.org/bot${botToken}/sendVideo`,
+            '-F',
+            `chat_id=${chatId}`,
+            '-F',
+            `caption=${caption}`,
+            '-F',
+            `video=@${videoAbs};type=video/mp4`,
+          ]);
+          let stdout = '';
+          let stderr = '';
+          child.stdout.on('data', (d) => (stdout += d.toString()));
+          child.stderr.on('data', (d) => (stderr += d.toString()));
+          child.on('close', (code) => {
+            if (stdout.trim().startsWith('{')) resolve(stdout.trim());
+            else if (code === 0) resolve(stdout.trim());
+            else reject(new Error(stderr.trim() || `curl exit ${code}`));
+          });
+          child.on('error', (err) => reject(err));
         });
-        const tgData: any = await tgRes.json();
-        if (tgRes.ok && tgData?.ok) {
-          return { ok: true, message: `✅ Video MP4 + Copy Viral enviado directamente a tu Telegram (${chatId}).` };
+
+        const tgData: any = JSON.parse(curlOut || '{}');
+        if (tgData?.ok) {
+          return {
+            ok: true,
+            message: `✅ Video MP4 "${clip.title}" enviado con éxito por ${botUsername} a tu chat (${chatId}).`,
+          };
+        }
+        const desc = String(tgData?.description || 'Error desconocido');
+        if (/chat not found/i.test(desc)) {
+          return {
+            ok: false,
+            message: `Telegram respondió "chat not found" para el Chat ID ${chatId}. Primero abre tu bot ${botUsername} en Telegram y pulsa "Iniciar" (/start) para que pueda enviarte videos.`,
+          };
         }
         return {
           ok: false,
-          message: `Telegram API respondió: ${tgData?.description || tgRes.statusText}`,
+          message: `Telegram API (${botUsername}) respondió: ${desc}`,
         };
       } else {
         const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ chat_id: chatId, text: caption }),
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(12000),
         });
-        const tgData: any = await tgRes.json();
+        const tgData: any = await tgRes.json().catch(() => ({}));
         if (tgRes.ok && tgData?.ok) {
-          return { ok: true, message: `✅ Mensaje enviado a tu Telegram (${chatId}).` };
+          return { ok: true, message: `✅ Mensaje enviado por ${botUsername} a tu Telegram (${chatId}).` };
         }
-        return { ok: false, message: `Telegram API respondió: ${tgData?.description || tgRes.statusText}` };
+        return {
+          ok: false,
+          message: `Telegram API (${botUsername}) respondió: ${tgData?.description || tgRes.statusText}`,
+        };
       }
     } catch (err: any) {
       return { ok: false, message: `Error al conectar con Telegram API: ${err?.message}` };
@@ -3813,7 +3857,59 @@ export async function createBananaApiApp(): Promise<Express> {
       targetClipId = latest.rows[0]?.id;
     }
     if (!targetClipId) {
-      return res.status(404).json({ ok: false, message: 'No hay clips disponibles para enviar.' });
+      let bt = String(botToken || '').trim();
+      let cid = String(chatId || '').trim();
+      if (!bt || !cid) {
+        const cfgRes = await db.query<{ valueJson: string }>(
+          `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
+          [`telegram_config_${req.user!.sub}`]
+        );
+        if (cfgRes.rows[0]?.valueJson) {
+          try {
+            const parsed = JSON.parse(cfgRes.rows[0].valueJson);
+            if (!bt) bt = String(parsed.botToken || '').trim();
+            if (!cid) cid = String(parsed.chatId || '').trim();
+          } catch {}
+        }
+      }
+      if (!bt || !cid) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Ingresa primero tu Bot Token y Chat ID de Telegram.',
+        });
+      }
+      const meRes = await fetch(`https://api.telegram.org/bot${bt}/getMe`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(8000),
+      }).catch(() => null);
+      const meData: any = meRes ? await meRes.json().catch(() => ({})) : {};
+      if (!meRes || !meRes.ok || !meData?.ok) {
+        return res.status(400).json({
+          ok: false,
+          message: `Token de Bot de Telegram inválido o revocado (${meData?.description || '401 Unauthorized'}). Abre @BotFather en Telegram, escribe /token o /newbot y pega el token exacto.`,
+        });
+      }
+      const botUsername = meData?.result?.username ? `@${meData.result.username}` : 'tu Bot';
+      const msgRes = await fetch(`https://api.telegram.org/bot${bt}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: cid,
+          text: `🍌 BANANA CLIPS AI STUDIO — ¡Conexión de prueba exitosa con ${botUsername}! Aquí recibirás tus Shorts 9:16 automáticamente.`,
+        }),
+        signal: AbortSignal.timeout(10000),
+      }).catch(() => null);
+      const msgData: any = msgRes ? await msgRes.json().catch(() => ({})) : {};
+      if (msgRes?.ok && msgData?.ok) {
+        return res.json({
+          ok: true,
+          message: `✅ ¡Conexión exitosa! ${botUsername} envió un mensaje de prueba a tu Telegram (${cid}).`,
+        });
+      }
+      return res.status(400).json({
+        ok: false,
+        message: `Telegram (${botUsername}) respondió: ${msgData?.description || 'Asegúrate de haber pulsado /start en tu bot primero.'}`,
+      });
     }
     const result = await sendClipToTelegramHelperAsync({
       userId: req.user!.sub,
