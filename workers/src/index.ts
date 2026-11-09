@@ -331,6 +331,9 @@ export async function executeAiClippingJob(jobId: string): Promise<{
     const dubbingLanguage: string = config.dubbingLanguage || 'ES_LATAM';
     const splitScreenMode: SplitScreenRetentionMode =
       (config.splitScreenMode as SplitScreenRetentionMode) || 'NONE';
+    const facecamCorner: 'AUTO' | 'TOP_LEFT' | 'TOP_RIGHT' | 'BOTTOM_LEFT' | 'BOTTOM_RIGHT' =
+      (config.facecamCorner as any) || 'AUTO';
+    const maxClipsCount: number = Math.max(1, Math.min(7, Number(config.maxClipsCount || 3)));
     const backgroundMusicTrack: ViralMusicTrackId =
       (config.backgroundMusicTrack as ViralMusicTrackId) || 'NONE';
     const rangeStartSec: number = Math.max(0, Number(config.rangeStartSec || 0));
@@ -649,7 +652,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
       reasonEs?: string;
     }> = [];
 
-    const maxClipsToProduce = 3;
+    const maxClipsToProduce = maxClipsCount;
     const effectiveEnd = rangeEndSec > rangeStartSec + 3 ? Math.min(totalDur, rangeEndSec) : totalDur;
 
     const detectedBestMoments = await detectBestViralMomentsMultimodalAsync({
@@ -859,6 +862,7 @@ export async function executeAiClippingJob(jobId: string): Promise<{
         watermarkPosition,
         watermarkScalePx,
         splitScreenMode,
+        facecamCorner,
         backgroundMusicTrack,
         storageDir: storageRoot,
       });

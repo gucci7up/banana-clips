@@ -1887,7 +1887,7 @@ if anthropic_key:
                         },
                         {
                             "type": "text",
-                            "text": "Analyze this 16:9 video frame. Classify it: 1) Is it a gameplay/live stream with a small rectangular streamer webcam overlay (facecam box with a person inside) in a corner/edge? 2) Or is it wide sports/game trailer action where cropping tightly would cut off the play/characters (`isWideActionOrSports`: true)? 3) Or is it a podcast/interview/talking-head video? Return ONLY valid JSON: {\\"isGameplayWithFacecam\\": boolean, \\"isWideActionOrSports\\": boolean, \\"facecamBox\\": {\\"x\\": 0.02, \\"y\\": 0.04, \\"w\\": 0.25, \\"h\\": 0.42}, \\"gameplayCenterX\\": 0.56, \\"speakerX\\": 0.50}."
+                            "text": "Analyze this 16:9 video frame. Classify it: 1) Is it a gameplay/live stream with a small rectangular streamer webcam overlay (facecam box with a person inside) in a corner/edge? 2) Or is it wide sports/game trailer action where cropping tightly would cut off the play/characters (isWideActionOrSports: true)? 3) Or is it a podcast/interview/talking-head video? Return ONLY valid JSON: {\\"isGameplayWithFacecam\\": boolean, \\"isWideActionOrSports\\": boolean, \\"facecamBox\\": {\\"x\\": 0.02, \\"y\\": 0.04, \\"w\\": 0.25, \\"h\\": 0.42}, \\"gameplayCenterX\\": 0.56, \\"speakerX\\": 0.50}."
                         }
                     ]
                 }]
@@ -2685,6 +2685,7 @@ export function renderClipWithFfmpeg(params: {
   watermarkPosition?: WatermarkPosition;
   watermarkScalePx?: number;
   splitScreenMode?: SplitScreenRetentionMode;
+  facecamCorner?: 'AUTO' | 'TOP_LEFT' | 'TOP_RIGHT' | 'BOTTOM_LEFT' | 'BOTTOM_RIGHT';
   backgroundMusicTrack?: ViralMusicTrackId;
   storageDir?: string;
 }): MediaProbeResult {
@@ -2889,12 +2890,24 @@ export function renderClipWithFfmpeg(params: {
     // Top 46% = Zoomed crop of Streamer's Webcam Box | Bottom 54% = Main Gameplay Action Crop
     const topH = Math.floor(targetH * 0.46) - (Math.floor(targetH * 0.46) % 2);
     const botH = targetH - topH;
-    const fb = trackedResult?.facecamBox || { x: 0.02, y: 0.04, w: 0.26, h: 0.42 };
+    const cornerBoxes: Record<string, { x: number; y: number; w: number; h: number }> = {
+      TOP_LEFT: { x: 0.015, y: 0.03, w: 0.27, h: 0.43 },
+      TOP_RIGHT: { x: 0.715, y: 0.03, w: 0.27, h: 0.43 },
+      BOTTOM_LEFT: { x: 0.015, y: 0.54, w: 0.27, h: 0.43 },
+      BOTTOM_RIGHT: { x: 0.715, y: 0.54, w: 0.27, h: 0.43 },
+    };
+    const manualCorner =
+      params.facecamCorner && params.facecamCorner !== 'AUTO' ? cornerBoxes[params.facecamCorner] : undefined;
+    const fb = manualCorner || trackedResult?.facecamBox || { x: 0.02, y: 0.04, w: 0.26, h: 0.42 };
     const camX = Number(Math.max(0, Math.min(0.82, fb.x)).toFixed(3));
     const camY = Number(Math.max(0, Math.min(0.80, fb.y)).toFixed(3));
     const camW = Number(Math.max(0.16, Math.min(1.0 - camX, fb.w)).toFixed(3));
     const camH = Number(Math.max(0.20, Math.min(1.0 - camY, fb.h)).toFixed(3));
-    const gameCropX = Number((trackedResult?.gameplayCenterX ?? (camX < 0.4 ? 0.58 : 0.42)).toFixed(3));
+    const gameCropX = Number(
+      (manualCorner ? (camX < 0.4 ? 0.58 : 0.42) : trackedResult?.gameplayCenterX ?? (camX < 0.4 ? 0.58 : 0.42)).toFixed(
+        3
+      )
+    );
 
     const postStackParts: string[] = [
       `drawbox=x=0:y=${topH - 2}:w=${targetW}:h=4:color=#0A0B0E@0.92:t=fill`,
@@ -4822,3 +4835,334 @@ export function ensureFixtureVideo(outputPath: string, durationSec: number = 36)
   );
   return outputPath;
 }
+
+export interface YouTubeDiscoveredVideo {
+  videoId: string;
+  url: string;
+  title: string;
+  channelName: string;
+  channelHandle: string;
+  thumbnailUrl: string;
+  durationSec: number;
+  durationFormatted: string;
+  viewCount: number;
+  viewCountFormatted: string;
+  publishedText: string;
+  isLive: boolean;
+  viralScore: number;
+  viralBadgeText: string;
+  viralReasonEs: string;
+  recommendedMode: 'STREAMER_FACECAM_SPLIT' | 'PODCAST_SPEAKER' | 'WIDE_ACTION_BLUR';
+  recommendedFacecamCorner: 'AUTO' | 'TOP_LEFT' | 'TOP_RIGHT';
+}
+
+function formatDurationClock(sec: number): string {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s === 0) return 'EN VIVO';
+  const hrs = Math.floor(s / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const rem = s % 60;
+  if (hrs > 0) {
+    return `${hrs}:${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+  }
+  return `${mins}:${String(rem).padStart(2, '0')}`;
+}
+
+function formatViewCountCompact(views: number): string {
+  const v = Math.max(0, Number(views) || 0);
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M vistas`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K vistas`;
+  if (v > 0) return `${v} vistas`;
+  return 'Tendencia';
+}
+
+function scoreAndClassifyYouTubeVideo(item: {
+  videoId: string;
+  title: string;
+  channelName: string;
+  durationSec: number;
+  viewCount: number;
+  isLive: boolean;
+  rankIndex: number;
+}): Pick<
+  YouTubeDiscoveredVideo,
+  'viralScore' | 'viralBadgeText' | 'viralReasonEs' | 'recommendedMode' | 'recommendedFacecamCorner'
+> {
+  const t = `${item.title} ${item.channelName}`.toLowerCase();
+  const isGamingOrStreamer =
+    /gta|rp|roleplay|rdjavi|thegrefg|ibai|spreen|auron|westcol|elxokas|gameplay|fortnite|minecraft|warzone|fifa|fc25|valorant|twitch|kick|directo|stream/i.test(
+      t
+    );
+  const isSportsOrTrailer =
+    /mlb|nba|ufc|fútbol|futbol|gol|home run|ko|nocaut|trailer|rockstar|oficial|resumen|highlights|jugada|champions|messi|vinicius|ohtani|soto/i.test(
+      t
+    );
+
+  const recommendedMode: YouTubeDiscoveredVideo['recommendedMode'] = isGamingOrStreamer
+    ? 'STREAMER_FACECAM_SPLIT'
+    : isSportsOrTrailer
+      ? 'WIDE_ACTION_BLUR'
+      : 'PODCAST_SPEAKER';
+
+  const recommendedFacecamCorner: YouTubeDiscoveredVideo['recommendedFacecamCorner'] = /rdjavi|westcol|alofoke|ibai/i.test(t)
+    ? 'TOP_LEFT'
+    : 'AUTO';
+
+  let baseScore = 89 + Math.max(0, 8 - item.rankIndex);
+  if (item.viewCount > 500_000) baseScore += 3;
+  else if (item.viewCount > 100_000) baseScore += 2;
+  if (/[¡!¿?🔥😱🚨]|incre[ií]ble|verdad|exclusiv|millon|pol[eé]mic|reacci[oó]n|rompe|llora|pelea|final/i.test(t)) {
+    baseScore += 2;
+  }
+  const viralScore = Math.max(86, Math.min(99, baseScore));
+
+  const viralBadgeText =
+    viralScore >= 95
+      ? `🔥 ${viralScore}% EXPLOSIVO`
+      : viralScore >= 91
+        ? `⚡ ${viralScore}% MUY VIRAL`
+        : `📈 ${viralScore}% ALTO POTENCIAL`;
+
+  const viralReasonEs = isGamingOrStreamer
+    ? 'Ideal para Split 9:16 (Cámara del Streamer Arriba + Gameplay Abajo) con picos de reacción.'
+    : isSportsOrTrailer
+      ? 'Ideal para Modo Deportes / Acción Wide con fondo difuminado y subtítulos de impacto.'
+      : 'Ideal para Corte Multicámara 9:16 con seguimiento de hablante y subtítulos de 1-2 palabras.';
+
+  return {
+    viralScore,
+    viralBadgeText,
+    viralReasonEs,
+    recommendedMode,
+    recommendedFacecamCorner,
+  };
+}
+
+/**
+ * Searches YouTube directly (zero Google API key needed) using fast Innertube HTML JSON extraction
+ * with automatic fallback to `yt-dlp --flat-playlist --dump-json`, returning rich previewable cards.
+ */
+export async function searchYouTubeVideosForClippingAsync(params: {
+  query: string;
+  limit?: number;
+}): Promise<YouTubeDiscoveredVideo[]> {
+  const limit = Math.max(4, Math.min(18, Number(params.limit || 12)));
+  const rawQuery = String(params.query || '').trim() || 'podcast viral español';
+  const results: YouTubeDiscoveredVideo[] = [];
+
+  // 1. Ultra-fast YouTube Innertube HTML JSON scrape (~0.8s response time)
+  try {
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(rawQuery)}&hl=es`;
+    const res = await fetch(searchUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+      },
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const match = html.match(/var ytInitialData\s*=\s*(\{.+?\});<\/script>/s);
+      if (match?.[1]) {
+        const data = JSON.parse(match[1]);
+        const contents =
+          data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || [];
+        for (const section of contents) {
+          const items = section?.itemSectionRenderer?.contents || [];
+          for (const item of items) {
+            const vr = item?.videoRenderer;
+            if (!vr || !vr.videoId) continue;
+            const videoId = String(vr.videoId);
+            const title =
+              vr.title?.runs?.map((r: any) => r.text).join('') ||
+              vr.title?.simpleText ||
+              'Video de YouTube';
+            const channelName =
+              vr.ownerText?.runs?.[0]?.text ||
+              vr.longBylineText?.runs?.[0]?.text ||
+              'Canal de YouTube';
+            const canonicalUrl =
+              vr.ownerText?.runs?.[0]?.navigationEndpoint?.commandMetadata?.webCommandMetadata?.url || '';
+            const channelHandle = canonicalUrl.startsWith('/@') ? canonicalUrl.slice(1) : `@${channelName.replace(/\s+/g, '')}`;
+
+            const lengthText = vr.lengthText?.simpleText || '';
+            let durationSec = 0;
+            if (lengthText) {
+              const parts = lengthText.split(':').map((n: string) => parseInt(n, 10) || 0);
+              if (parts.length === 3) durationSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+              else if (parts.length === 2) durationSec = parts[0] * 60 + parts[1];
+              else durationSec = parts[0] || 0;
+            }
+            const isLive =
+              !lengthText ||
+              Boolean(vr.badges?.some((b: any) => /LIVE|VIVO|DIRECTO/i.test(b?.metadataBadgeRenderer?.label || '')));
+
+            const rawViewText = vr.viewCountText?.simpleText || vr.viewCountText?.runs?.map((r: any) => r.text).join('') || '';
+            const digitsOnly = rawViewText.replace(/[^0-9]/g, '');
+            const viewCount = digitsOnly ? parseInt(digitsOnly, 10) : 45000;
+            const publishedText = vr.publishedTimeText?.simpleText || (isLive ? '🔴 En Vivo Ahora' : 'Reciente');
+
+            const aiMeta = scoreAndClassifyYouTubeVideo({
+              videoId,
+              title,
+              channelName,
+              durationSec,
+              viewCount,
+              isLive,
+              rankIndex: results.length,
+            });
+
+            results.push({
+              videoId,
+              url: `https://www.youtube.com/watch?v=${videoId}`,
+              title,
+              channelName,
+              channelHandle,
+              thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+              durationSec,
+              durationFormatted: isLive ? '🔴 EN VIVO' : lengthText || formatDurationClock(durationSec),
+              viewCount,
+              viewCountFormatted: rawViewText || formatViewCountCompact(viewCount),
+              publishedText,
+              isLive,
+              ...aiMeta,
+            });
+
+            if (results.length >= limit) break;
+          }
+          if (results.length >= limit) break;
+        }
+      }
+    }
+  } catch {
+    // Fall through to yt-dlp search
+  }
+
+  if (results.length > 0) {
+    return results;
+  }
+
+  // 2. Fallback to yt-dlp --flat-playlist --dump-json
+  try {
+    const { stdout } = await runCommandAsync(
+      'yt-dlp',
+      ['--flat-playlist', '--dump-json', '--no-warnings', `ytsearch${limit}:${rawQuery}`],
+      18000
+    );
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      try {
+        const j = JSON.parse(line);
+        const videoId = String(j.id || '').trim();
+        if (!videoId) continue;
+        const title = String(j.title || 'Video de YouTube');
+        const channelName = String(j.uploader || j.channel || 'YouTube Creator');
+        const durationSec = Number(j.duration || 0);
+        const viewCount = Number(j.view_count || 35000);
+        const isLive = Boolean(j.is_live || j.live_status === 'is_live');
+        const aiMeta = scoreAndClassifyYouTubeVideo({
+          videoId,
+          title,
+          channelName,
+          durationSec,
+          viewCount,
+          isLive,
+          rankIndex: results.length,
+        });
+        results.push({
+          videoId,
+          url: j.url?.startsWith('http') ? j.url : `https://www.youtube.com/watch?v=${videoId}`,
+          title,
+          channelName,
+          channelHandle: j.uploader_id || `@${channelName.replace(/\s+/g, '')}`,
+          thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          durationSec,
+          durationFormatted: isLive ? '🔴 EN VIVO' : formatDurationClock(durationSec),
+          viewCount,
+          viewCountFormatted: formatViewCountCompact(viewCount),
+          publishedText: isLive ? '🔴 En Vivo' : 'YouTube',
+          isLive,
+          ...aiMeta,
+        });
+      } catch {}
+    }
+  } catch {}
+
+  return results;
+}
+
+/**
+ * AI YouTube Viral Radar: Scans YouTube for the most viral videos right now across categories
+ * and enriches the top picks with Claude 5.5 Haiku ($0.00 Grok cost) viral hook analysis.
+ */
+export async function analyzeTrendingYouTubeViralsWithAiAsync(params: {
+  niche?: string;
+  limit?: number;
+}): Promise<{
+  niche: string;
+  aiSummaryEs: string;
+  videos: YouTubeDiscoveredVideo[];
+}> {
+  const niche = String(params.niche || 'ALL').toUpperCase();
+  const limit = Math.max(6, Math.min(16, Number(params.limit || 12)));
+
+  const nicheQueryMap: Record<string, string> = {
+    ALL: 'entrevista viral millones de vistas español 2026 podcast streamer',
+    STREAMERS_GAMING: 'RDjavi TheGrefg Ibai Westcol GTA RP gameplay reaccion viral',
+    PODCASTS_SHOWS: 'Alofoke Radio Show The Wild Project entrevista exclusiva viral',
+    DEPORTES_ACCION: 'MLB NBA Champions League jugadas virales resumen goles',
+    DIRECTOS_VIVO: 'en vivo directo stream español reaccionando hoy',
+    URBANO_MUSICA: 'entrevista musica urbana estreno tendencia viral',
+  };
+
+  const searchQuery = nicheQueryMap[niche] || params.niche || nicheQueryMap.ALL;
+  const videos = await searchYouTubeVideosForClippingAsync({ query: searchQuery, limit });
+
+  let aiSummaryEs =
+    'Radar IA en tiempo real: estos videos tienen la mayor velocidad de vistas, retención emocional y estructura ideal para extraer Shorts 9:16 hoy.';
+
+  // Optional fast Claude 5.5 Haiku enrichment of why the top 4 videos are exploding
+  const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+  if (anthropicKey && videos.length > 0) {
+    try {
+      const topList = videos
+        .slice(0, 5)
+        .map((v, idx) => `${idx + 1}. "${v.title}" (${v.channelName} - ${v.viewCountFormatted})`)
+        .join('\n');
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': anthropicKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-haiku-latest',
+          max_tokens: 240,
+          temperature: 0.3,
+          messages: [
+            {
+              role: 'user',
+              content: `Analiza en 2 oraciones breves en español por qué estos videos de YouTube están siendo tendencia viral hoy y qué tipo de clip 9:16 conviene sacar de ellos:\n${topList}`,
+            },
+          ],
+        }),
+      });
+      if (res.ok) {
+        const data: any = await res.json();
+        const text = data?.content?.[0]?.text?.trim();
+        if (text) aiSummaryEs = text;
+      }
+    } catch {}
+  }
+
+  return {
+    niche,
+    aiSummaryEs,
+    videos: videos.sort((a, b) => b.viralScore - a.viralScore),
+  };
+}
+

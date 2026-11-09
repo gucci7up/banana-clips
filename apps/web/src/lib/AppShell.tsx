@@ -43,7 +43,7 @@ const MAIN_NAV = [
   { href: '/ai-montage', labelEs: 'AI Story 60s & Stickman', labelEn: 'AI Story 60s', icon: Layers, badge: '24FPS', badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
   { href: '/library', labelEs: 'Mi Biblioteca', labelEn: 'My Library', icon: FolderKanban },
   { href: '/game-clipping', labelEs: 'Game Clipping', labelEn: 'Game Clipping', icon: Gamepad2 },
-  { href: '/find-moments', labelEs: 'Find Moments', labelEn: 'Find Moments', icon: Search },
+  { href: '/find-moments', labelEs: 'Radar Viral YouTube & Momentos', labelEn: 'YouTube Viral Radar & Moments', icon: Search, badge: 'VIRAL', badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/30' },
   { href: '/editor', labelEs: 'Editor de Video', labelEn: 'Video Editor', icon: Film },
   { href: '/social', labelEs: 'Publicaciones', labelEn: 'Social Publishing', icon: Share2 },
   { href: '/templates', labelEs: 'Plantillas', labelEn: 'Templates', icon: Sparkles },

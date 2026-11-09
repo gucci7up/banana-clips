@@ -15,6 +15,7 @@ import {
 import { SUBTITLE_TEMPLATES, validateSafeExternalUrl } from '@banana/shared';
 import {
   analyzeClipArcAndDebateWithClaudeAsync,
+  analyzeTrendingYouTubeViralsWithAiAsync,
   applyColdOpenToClipWithClaudeAsync,
   applyVoiceDubbingToClipAsync,
   buildPremiereXmlForClip,
@@ -37,6 +38,7 @@ import {
   probeMediaWithFfprobe,
   render60sStoryVideoFromScenesAsync,
   renderClipWithFfmpeg,
+  searchYouTubeVideosForClippingAsync,
   signStorageObjectUrl,
   transcribeVideoWithFasterWhisperAsync,
   verifySignedStorageToken,
@@ -3908,6 +3910,27 @@ export async function createBananaApiApp(): Promise<Express> {
       [crypto.randomUUID(), req.user!.sub, key, JSON.stringify(valueJson)]
     );
     return res.json({ updated: true, key, valueJson });
+  });
+
+  // ===========================================================================
+  // 16. IN-APP YOUTUBE SEARCH & AI VIRAL RADAR (/api/v1/youtube/*)
+  // ===========================================================================
+  router.get('/youtube/search', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const q = String(req.query.q || '').trim() || 'podcast viral español';
+    const limit = Math.max(4, Math.min(18, Number(req.query.limit || 12)));
+    const videos = await searchYouTubeVideosForClippingAsync({ query: q, limit });
+    return res.json({
+      query: q,
+      count: videos.length,
+      videos,
+    });
+  });
+
+  router.get('/youtube/trending-viral', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const niche = String(req.query.niche || 'ALL').trim();
+    const limit = Math.max(6, Math.min(16, Number(req.query.limit || 12)));
+    const radar = await analyzeTrendingYouTubeViralsWithAiAsync({ niche, limit });
+    return res.json(radar);
   });
 
   app.use('/api/v1', router);

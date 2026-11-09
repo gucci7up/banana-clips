@@ -28,6 +28,12 @@ import {
   Languages,
   BookOpen,
   LayoutGrid,
+  Search,
+  Play,
+  Flame,
+  Terminal,
+  Eye,
+  X,
 } from 'lucide-react';
 
 const PIPELINE_PHASES = [
@@ -187,7 +193,90 @@ export default function AiClippingPage() {
   const [autoTransitions, setAutoTransitions] = useState<boolean>(true);
   const [autoColorCorrection, setAutoColorCorrection] = useState<boolean>(true);
   const [splitScreenMode, setSplitScreenMode] = useState<string>('NONE');
+  const [facecamCorner, setFacecamCorner] = useState<'AUTO' | 'TOP_LEFT' | 'TOP_RIGHT' | 'BOTTOM_LEFT' | 'BOTTOM_RIGHT'>('AUTO');
+  const [maxClipsCount, setMaxClipsCount] = useState<number>(3);
   const [ctaOutro, setCtaOutro] = useState<boolean>(false);
+
+  // In-App YouTube Search & AI Viral Radar State
+  const [ytActiveTab, setYtActiveTab] = useState<'SEARCH' | 'VIRAL_RADAR'>('SEARCH');
+  const [ytQuery, setYtQuery] = useState<string>('');
+  const [ytRadarNiche, setYtRadarNiche] = useState<string>('ALL');
+  const [ytResults, setYtResults] = useState<any[]>([]);
+  const [ytAiSummary, setYtAiSummary] = useState<string>('');
+  const [ytLoading, setYtLoading] = useState<boolean>(false);
+  const [previewYtVideo, setPreviewYtVideo] = useState<any | null>(null);
+  const [selectedVisualizerClipId, setSelectedVisualizerClipId] = useState<string>('');
+  const [consoleLogs, setConsoleLogs] = useState<string[]>([
+    '[SISTEMA] Banana Clips Pro Studio v4.0 listo. Motor YouTube Direct + Radar IA activos ($0.00 créditos).',
+  ]);
+
+  const appendConsoleLog = (msg: string) => {
+    const time = new Date().toLocaleTimeString('es-ES', { hour12: false });
+    setConsoleLogs((prev) => [...prev.slice(-28), `[${time}] ${msg}`]);
+  };
+
+  const runYouTubeSearch = async (queryText: string) => {
+    const cleanQ = queryText.trim() || '@Alofokeradioshow';
+    setYtQuery(cleanQ);
+    setYtActiveTab('SEARCH');
+    setYtLoading(true);
+    appendConsoleLog(`Buscando videos en YouTube para "${cleanQ}"...`);
+    try {
+      const res = await apiFetch<{ videos: any[] }>(`/youtube/search?q=${encodeURIComponent(cleanQ)}&limit=12`);
+      const list = res.videos || [];
+      setYtResults(list);
+      appendConsoleLog(`[OK] Se encontraron ${list.length} videos disponibles y listos para previsualizar o clipear.`);
+    } catch (err: any) {
+      appendConsoleLog(`[ERROR] Falló búsqueda de YouTube: ${err?.message || 'Error de red'}`);
+    } finally {
+      setYtLoading(false);
+    }
+  };
+
+  const runYouTubeViralRadar = async (nicheKey: string = 'ALL') => {
+    setYtRadarNiche(nicheKey);
+    setYtActiveTab('VIRAL_RADAR');
+    setYtLoading(true);
+    appendConsoleLog(`Analizando YouTube con Radar IA para detectar los videos más virales (${nicheKey})...`);
+    try {
+      const res = await apiFetch<{ niche: string; aiSummaryEs: string; videos: any[] }>(
+        `/youtube/trending-viral?niche=${encodeURIComponent(nicheKey)}&limit=12`
+      );
+      setYtResults(res.videos || []);
+      setYtAiSummary(res.aiSummaryEs || '');
+      appendConsoleLog(`[OK] Radar IA detectó ${res.videos?.length || 0} videos en tendencia explosiva en YouTube.`);
+    } catch (err: any) {
+      appendConsoleLog(`[ERROR] Falló Radar IA: ${err?.message || 'Error'}`);
+    } finally {
+      setYtLoading(false);
+    }
+  };
+
+  const handleSelectYouTubeVideoForClipping = (ytVid: any, autoStart = false) => {
+    setExternalUrl(ytVid.url);
+    setUploadTitle(ytVid.title);
+    setUploadFile(null);
+    if (ytVid.recommendedMode === 'STREAMER_FACECAM_SPLIT') {
+      setSplitScreenMode('STREAMER_FACECAM_SPLIT');
+      setLayoutVariant('9:16_game');
+      setFacecamCorner(ytVid.recommendedFacecamCorner || 'TOP_LEFT');
+    } else if (ytVid.recommendedMode === 'WIDE_ACTION_BLUR') {
+      setSplitScreenMode('WIDE_ACTION_BLUR');
+      setLayoutVariant('9:16_blur');
+    } else {
+      setSplitScreenMode('NONE');
+      setLayoutVariant('9:16_fill');
+    }
+    appendConsoleLog(
+      `Video seleccionado: "${ytVid.title}" (${ytVid.durationFormatted}) • Modo IA: ${ytVid.recommendedMode}`
+    );
+    if (autoStart) {
+      setTimeout(() => {
+        const btn = document.querySelector('[data-testid="btn-run-ai-clipping"]') as HTMLButtonElement | null;
+        if (btn && !btn.disabled) btn.click();
+      }, 150);
+    }
+  };
 
   // Translate: Voice dubbing & Caption translation
   const [voiceDubbing, setVoiceDubbing] = useState<boolean>(false);
@@ -218,6 +307,7 @@ export default function AiClippingPage() {
 
   useEffect(() => {
     loadData();
+    runYouTubeViralRadar('ALL');
   }, []);
 
   const parseTimeSec = (str: string): number => {
@@ -323,6 +413,8 @@ export default function AiClippingPage() {
           autoTransitions,
           autoColorCorrection,
           splitScreenMode,
+          facecamCorner,
+          maxClipsCount,
           brandWatermarkText: brandKitMode === 'NONE' ? '' : brandWatermarkText,
           ctaOutro,
           voiceDubbing,
@@ -349,12 +441,14 @@ export default function AiClippingPage() {
         progressPercent: 2,
       };
       setActiveJob(currentJob);
+      appendConsoleLog(`Job ${jobRes.jobId.slice(0, 8)} iniciado — Descargando y detectando mejores momentos virales...`);
 
       while (true) {
         await new Promise((r) => setTimeout(r, 1000));
         try {
           const statusRes = await apiFetch<{ job: any }>(`/jobs/${jobRes.jobId}`);
           if (statusRes?.job) {
+            const prevPhase = currentJob?.currentPhase;
             currentJob = statusRes.job;
             const dlPctMatch = (currentJob.currentPhase || '').match(/\((\d+)%\)/);
             if (currentJob.status === 'DOWNLOADING' && dlPctMatch) {
@@ -363,11 +457,16 @@ export default function AiClippingPage() {
                 progressPercent: Math.max(2, Math.min(99, parseInt(dlPctMatch[1], 10))),
               };
             }
+            if (currentJob.currentPhase && currentJob.currentPhase !== prevPhase) {
+              appendConsoleLog(`[${currentJob.status}] ${currentJob.currentPhase}`);
+            }
             setActiveJob(currentJob);
             if (currentJob.status === 'COMPLETED') {
+              appendConsoleLog(`[COMPLETADO] ¡Shorts renderizados con éxito y listos en el Visualizador 9:16!`);
               break;
             }
             if (currentJob.status === 'FAILED' || currentJob.status === 'CANCELED') {
+              appendConsoleLog(`[ERROR] ${currentJob.errorMessage || 'El trabajo falló.'}`);
               throw new Error(currentJob.errorMessage || 'El trabajo falló o fue cancelado.');
             }
           }
@@ -505,6 +604,317 @@ export default function AiClippingPage() {
               ))}
             </select>
           </div>
+        </div>
+
+        {/* Quick Clipper Viral Controls Bar (Split 9:16 + Facecam Corner + Number of Clips + Duration) */}
+        <div className="mt-4 grid grid-cols-1 gap-3 border-t border-zinc-800 pt-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-[#FFD43B]">
+              Formato de Pantalla (Auto / Split 9:16)
+            </label>
+            <select
+              value={splitScreenMode}
+              onChange={(e) => setSplitScreenMode(e.target.value)}
+              className="w-full rounded-xl border border-zinc-700 bg-[#1C1C21] px-3 py-2 text-xs font-bold text-white focus:border-[#FFD43B] focus:outline-none"
+            >
+              <option value="NONE">✨ Auto IA (Detecta Streamer, Podcast o Deportes)</option>
+              <option value="STREAMER_FACECAM_SPLIT">📹 Split 9:16 (Creador Arriba + Juego Abajo)</option>
+              <option value="WIDE_ACTION_BLUR">🏟️ Deportes / Trailer Wide (Fondo Difuminado)</option>
+              <option value="HYPNOTIC_TUNNEL">🌀 Split 50/50 Túnel Hipnótico</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-emerald-400">
+              Posición Cámara del Streamer (Split 9:16)
+            </label>
+            <select
+              value={facecamCorner}
+              onChange={(e) => setFacecamCorner(e.target.value as any)}
+              className="w-full rounded-xl border border-zinc-700 bg-[#1C1C21] px-3 py-2 text-xs font-bold text-white focus:border-[#FFD43B] focus:outline-none"
+            >
+              <option value="AUTO">🤖 Auto-Detectar Esquina con IA</option>
+              <option value="TOP_LEFT">↖ Esquina Superior Izquierda (ej. RDjavi / Ibai)</option>
+              <option value="TOP_RIGHT">↗ Esquina Superior Derecha</option>
+              <option value="BOTTOM_LEFT">↙ Esquina Inferior Izquierda</option>
+              <option value="BOTTOM_RIGHT">↘ Esquina Inferior Derecha</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold text-zinc-400">Clips a Extraer</label>
+              <select
+                value={maxClipsCount}
+                onChange={(e) => setMaxClipsCount(Number(e.target.value))}
+                className="w-full rounded-xl border border-zinc-700 bg-[#1C1C21] px-2.5 py-2 text-xs font-bold text-[#FFD43B]"
+              >
+                <option value={1}>1 Clip Top</option>
+                <option value={3}>3 Clips Virales</option>
+                <option value={5}>5 Clips Virales</option>
+                <option value={7}>7 Clips Virales</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold text-zinc-400">Duración Base</label>
+              <select
+                value={targetDurationSec}
+                onChange={(e) => setTargetDurationSec(Number(e.target.value))}
+                className="w-full rounded-xl border border-zinc-700 bg-[#1C1C21] px-2.5 py-2 text-xs font-bold text-white"
+              >
+                <option value={20}>20 seg</option>
+                <option value={30}>30 seg</option>
+                <option value={35}>35 seg</option>
+                <option value={45}>45 seg</option>
+                <option value={60}>60 seg</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-end">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={(e) => handleUploadAndAnalyze(e as any)}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#FF2020] via-[#FF5500] to-[#FFD43B] px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-lg transition hover:brightness-110 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Flame className="h-4 w-4" />}
+              <span>{busy ? 'Clipeando en Tiempo Real...' : '⚡ Buscar y Clipear Ahora'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* IN-APP YOUTUBE SEARCH & AI VIRAL RADAR EXPLORER */}
+      <div className="rounded-3xl border border-zinc-800 bg-[#141417] p-5 shadow-2xl">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-red-600 text-white shadow">
+              <Play className="h-4 w-4 fill-current" />
+            </span>
+            <div>
+              <h2 className="text-base font-extrabold text-white">
+                Buscador Directo de YouTube + Radar IA de Videos Más Virales
+              </h2>
+              <p className="text-[11px] text-zinc-400">
+                Busca cualquier streamer, canal o tema, previsualiza el video aquí mismo y clipéalo en 1 clic sin salir de Banana Clips
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setYtActiveTab('SEARCH')}
+              className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-extrabold transition ${
+                ytActiveTab === 'SEARCH'
+                  ? 'bg-[#FFD43B] text-[#111318]'
+                  : 'border border-zinc-700 bg-[#1C1C21] text-zinc-300 hover:text-white'
+              }`}
+            >
+              <Search className="h-3.5 w-3.5" /> Buscador de YouTube
+            </button>
+            <button
+              type="button"
+              onClick={() => runYouTubeViralRadar(ytRadarNiche)}
+              className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-extrabold transition ${
+                ytActiveTab === 'VIRAL_RADAR'
+                  ? 'bg-gradient-to-r from-red-600 to-amber-500 text-white shadow'
+                  : 'border border-zinc-700 bg-[#1C1C21] text-zinc-300 hover:text-white'
+              }`}
+            >
+              <Flame className="h-3.5 w-3.5" /> 🔥 Más Virales en Todo YouTube (IA)
+            </button>
+          </div>
+        </div>
+
+        {/* Search Input + Quick Access Channel Pills */}
+        <div className="mt-4 space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="relative flex-1">
+              <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-zinc-400" />
+              <input
+                type="text"
+                data-testid="yt-search-input"
+                value={ytQuery}
+                onChange={(e) => setYtQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    runYouTubeSearch(ytQuery);
+                  }
+                }}
+                placeholder="Escribe el nombre de un creador, canal o tema (ej: alofoke, @RDjavi, @TheGrefg, @ibai, GTA 6, MLB)..."
+                className="w-full rounded-xl border border-zinc-700 bg-[#1C1C21] pl-10 pr-4 py-2 text-xs text-white focus:border-[#FFD43B] focus:outline-none"
+              />
+            </div>
+            <button
+              type="button"
+              data-testid="yt-search-submit"
+              disabled={ytLoading}
+              onClick={() => runYouTubeSearch(ytQuery)}
+              className="flex items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-2 text-xs font-extrabold text-white transition hover:bg-red-500 disabled:opacity-50"
+            >
+              {ytLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              <span>Buscar en YouTube</span>
+            </button>
+          </div>
+
+          {/* Quick Access Pills (Acceso Rápido) */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-[11px] font-bold text-zinc-400">Acceso Rápido:</span>
+            {[
+              { label: '🔥 Top Virales Hoy IA', action: () => runYouTubeViralRadar('ALL') },
+              { label: '🎮 Streamers & GTA RP', action: () => runYouTubeViralRadar('STREAMERS_GAMING') },
+              { label: '🎙️ Podcasts Virales', action: () => runYouTubeViralRadar('PODCASTS_SHOWS') },
+              { label: '⚾ Deportes & Jugadas', action: () => runYouTubeViralRadar('DEPORTES_ACCION') },
+              { label: '🔴 Directos En Vivo', action: () => runYouTubeViralRadar('DIRECTOS_VIVO') },
+              { label: '@RDjavi', action: () => runYouTubeSearch('@RDjavi GTA RP') },
+              { label: '@Alofokeradioshow', action: () => runYouTubeSearch('Alofoke Radio Show entrevista') },
+              { label: '@TheGrefg', action: () => runYouTubeSearch('@TheGrefg') },
+              { label: '@ibai', action: () => runYouTubeSearch('@ibai') },
+              { label: 'GTA VI Trailer', action: () => runYouTubeSearch('GTA 6 Rockstar trailer') },
+            ].map((pill) => (
+              <button
+                key={pill.label}
+                type="button"
+                onClick={pill.action}
+                className="rounded-lg border border-zinc-700/80 bg-[#1C1C21] px-2.5 py-1 text-[11px] font-bold text-zinc-200 transition hover:border-[#FFD43B] hover:text-[#FFD43B]"
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
+
+          {/* AI Viral Radar Insight Banner */}
+          {ytActiveTab === 'VIRAL_RADAR' && ytAiSummary && (
+            <div className="flex items-start gap-2.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+              <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-[#FFD43B]" />
+              <div>
+                <span className="font-extrabold text-[#FFD43B]">Análisis IA de Tendencias en YouTube: </span>
+                <span>{ytAiSummary}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Inline YouTube Video Preview Modal / Drawer when user clicks Previsualizar */}
+        {previewYtVideo && (
+          <div className="mt-4 rounded-2xl border-2 border-[#FFD43B] bg-[#0E0F13] p-4 shadow-2xl">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="rounded bg-red-600 px-2 py-0.5 text-[10px] font-black text-white">
+                  PREVISUALIZACIÓN EN VIVO DE YOUTUBE
+                </span>
+                <h3 className="mt-1 text-sm font-extrabold text-white">{previewYtVideo.title}</h3>
+                <p className="text-[11px] text-zinc-400">
+                  {previewYtVideo.channelName} • {previewYtVideo.viewCountFormatted} • Duración:{' '}
+                  {previewYtVideo.durationFormatted} • {previewYtVideo.viralReasonEs}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSelectYouTubeVideoForClipping(previewYtVideo, true);
+                    setPreviewYtVideo(null);
+                  }}
+                  className="flex items-center gap-1.5 rounded-xl bg-[#FFD43B] px-4 py-2 text-xs font-black text-[#111318] hover:bg-amber-400"
+                >
+                  <Scissors className="h-3.5 w-3.5" /> ⚡ Clipear Este Video Ahora
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewYtVideo(null)}
+                  className="rounded-xl border border-zinc-700 bg-zinc-800 p-2 text-zinc-300 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="aspect-video w-full max-h-[380px] overflow-hidden rounded-xl border border-zinc-800 bg-black">
+              <iframe
+                src={`https://www.youtube.com/embed/${previewYtVideo.videoId}?autoplay=1&rel=0`}
+                title={previewYtVideo.title}
+                className="h-full w-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        )}
+
+        {/* YouTube Video Results Grid */}
+        <div className="mt-4">
+          {ytLoading ? (
+            <div className="flex items-center justify-center gap-2 rounded-2xl border border-zinc-800 bg-[#18181B] p-8 text-xs font-bold text-zinc-300">
+              <Loader2 className="h-4 w-4 animate-spin text-[#FFD43B]" />
+              <span>Escaneando YouTube y calculando potencial viral con IA...</span>
+            </div>
+          ) : ytResults.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-zinc-800 p-6 text-center text-xs text-zinc-400">
+              Escribe el nombre de cualquier canal o tema arriba y pulsa <strong>"Buscar en YouTube"</strong>.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+              {ytResults.map((yt) => (
+                <div
+                  key={yt.videoId}
+                  data-testid="yt-search-card"
+                  className="group flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800 bg-[#18181B] transition hover:border-[#FFD43B]/80"
+                >
+                  <div>
+                    <div className="relative aspect-video w-full overflow-hidden bg-black">
+                      <img
+                        src={yt.thumbnailUrl}
+                        alt={yt.title}
+                        className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                        loading="lazy"
+                      />
+                      <span className="absolute left-2 top-2 rounded-md bg-black/85 px-2 py-0.5 text-[10px] font-black text-[#FFD43B] backdrop-blur">
+                        {yt.viralBadgeText || `🔥 ${yt.viralScore}% VIRAL`}
+                      </span>
+                      <span
+                        className={`absolute bottom-2 right-2 rounded px-1.5 py-0.5 text-[10px] font-bold text-white ${
+                          yt.isLive ? 'bg-red-600' : 'bg-black/85'
+                        }`}
+                      >
+                        {yt.durationFormatted}
+                      </span>
+                    </div>
+
+                    <div className="p-3">
+                      <div className="flex items-center justify-between gap-1 text-[10px] font-bold text-zinc-400">
+                        <span className="truncate text-emerald-400">{yt.channelName}</span>
+                        <span>{yt.viewCountFormatted}</span>
+                      </div>
+                      <h3 className="mt-1 line-clamp-2 text-xs font-extrabold text-white" title={yt.title}>
+                        {yt.title}
+                      </h3>
+                      <p className="mt-1 line-clamp-2 text-[10px] text-zinc-400">{yt.viralReasonEs}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1.5 border-t border-zinc-800/80 p-2.5 bg-[#121318]">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewYtVideo(yt)}
+                      className="flex items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-[#1C1C21] px-2 py-1.5 text-[11px] font-bold text-zinc-200 hover:border-white hover:text-white"
+                    >
+                      <Eye className="h-3 w-3" /> Previsualizar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectYouTubeVideoForClipping(yt, false)}
+                      className="flex items-center justify-center gap-1 rounded-lg bg-[#FFD43B] px-2 py-1.5 text-[11px] font-black text-[#111318] hover:bg-amber-400"
+                    >
+                      <Scissors className="h-3 w-3" /> Usar Video
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1474,6 +1884,155 @@ export default function AiClippingPage() {
           </div>
         </div>
       </form>
+
+      {/* 3-COLUMN LIVE CLIPPER WORKSPACE (Clips Table + 9:16 Visualizer + Real-Time Console) */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        {/* Left 5 cols: Clips Virales Extraídos Table */}
+        <div className="rounded-3xl border border-zinc-800 bg-[#141417] p-4 shadow-2xl lg:col-span-5">
+          <div className="mb-3 flex items-center justify-between border-b border-zinc-800 pb-2.5">
+            <h3 className="text-xs font-extrabold uppercase tracking-wider text-white">
+              📋 Clips Virales Extraídos ({sortedClips.length})
+            </h3>
+            <span className="text-[11px] font-bold text-emerald-400">Haz clic para ver en 9:16</span>
+          </div>
+          <div className="max-h-[410px] overflow-y-auto">
+            <table className="w-full text-left text-[11px]">
+              <thead className="border-b border-zinc-800 text-zinc-400">
+                <tr>
+                  <th className="py-2 pr-2">#</th>
+                  <th className="py-2 pr-2">Clip / Hook</th>
+                  <th className="py-2 pr-2">Inicio</th>
+                  <th className="py-2 pr-2">Fin</th>
+                  <th className="py-2 pr-2">Viral %</th>
+                  <th className="py-2">Acción</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/70">
+                {sortedClips.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-zinc-500">
+                      Aún no hay clips extraídos. Selecciona un video de YouTube arriba y pulsa Clipear.
+                    </td>
+                  </tr>
+                ) : (
+                  sortedClips.slice(0, 12).map((c, idx) => {
+                    const isSel =
+                      (selectedVisualizerClipId && selectedVisualizerClipId === c.id) ||
+                      (!selectedVisualizerClipId && idx === 0);
+                    return (
+                      <tr
+                        key={c.id}
+                        onClick={() => setSelectedVisualizerClipId(c.id)}
+                        className={`cursor-pointer transition ${
+                          isSel ? 'bg-[#FFD43B]/15 text-white' : 'text-zinc-300 hover:bg-zinc-800/60'
+                        }`}
+                      >
+                        <td className="py-2 pr-2 font-black text-[#FFD43B]">{idx + 1}</td>
+                        <td className="py-2 pr-2 font-semibold line-clamp-1 max-w-[150px]" title={c.title}>
+                          {c.title}
+                        </td>
+                        <td className="py-2 pr-2 font-mono text-zinc-400">{Math.round(c.startSec || 0)}s</td>
+                        <td className="py-2 pr-2 font-mono text-zinc-400">{Math.round(c.endSec || c.durationSec || 20)}s</td>
+                        <td className="py-2 pr-2">
+                          <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 font-black text-emerald-300">
+                            {c.scoreTotal ?? 92}%
+                          </span>
+                        </td>
+                        <td className="py-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedVisualizerClipId(c.id);
+                            }}
+                            className="rounded bg-[#FFD43B] px-2 py-0.5 text-[10px] font-black text-[#111318]"
+                          >
+                            Ver 9:16
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Center 3 cols: Visualizador de Clip 9:16 */}
+        <div className="flex flex-col justify-between rounded-3xl border border-zinc-800 bg-[#141417] p-4 shadow-2xl lg:col-span-3">
+          <div className="mb-2 flex items-center justify-between border-b border-zinc-800 pb-2">
+            <h3 className="text-xs font-extrabold uppercase tracking-wider text-white">
+              📱 Visualizador de Clip 9:16
+            </h3>
+            <span className="rounded bg-[#FFD43B]/20 px-2 py-0.5 text-[10px] font-black text-[#FFD43B]">
+              SHORTS / REELS
+            </span>
+          </div>
+
+          {(() => {
+            const activeClip =
+              sortedClips.find((c) => c.id === selectedVisualizerClipId) || sortedClips[0] || null;
+            if (!activeClip?.signedDownloadUrl) {
+              return (
+                <div className="flex h-[340px] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-black/60 p-4 text-center text-xs text-zinc-500">
+                  <Film className="mb-2 h-8 w-8 text-zinc-600" />
+                  <span>Aquí verás la previsualización vertical 9:16 de cada Short generado</span>
+                </div>
+              );
+            }
+            return (
+              <div className="space-y-2.5">
+                <div className="mx-auto aspect-[9/16] max-h-[340px] overflow-hidden rounded-2xl border border-zinc-700 bg-black shadow-xl">
+                  <video
+                    key={activeClip.id}
+                    src={activeClip.signedDownloadUrl}
+                    controls
+                    preload="metadata"
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <a
+                    href={activeClip.signedDownloadUrl}
+                    download={`${activeClip.title}.mp4`}
+                    className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-[#FFD43B] py-2 text-xs font-black text-[#111318] hover:bg-amber-400"
+                  >
+                    <Download className="h-3.5 w-3.5" /> Descargar MP4
+                  </a>
+                  <Link
+                    href={`/editor?clipId=${activeClip.id}`}
+                    className="rounded-xl border border-zinc-700 bg-[#1C1C21] px-3 py-2 text-xs font-bold text-white hover:border-[#FFD43B]"
+                  >
+                    Editar
+                  </Link>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* Right 4 cols: Consola en Tiempo Real */}
+        <div className="flex flex-col justify-between rounded-3xl border border-zinc-800 bg-[#0D0E12] p-4 shadow-2xl lg:col-span-4">
+          <div className="mb-2 flex items-center justify-between border-b border-zinc-800 pb-2">
+            <div className="flex items-center gap-1.5">
+              <Terminal className="h-4 w-4 text-emerald-400" />
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-white">
+                Consola IA en Tiempo Real
+              </h3>
+            </div>
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+          </div>
+
+          <div className="h-[360px] overflow-y-auto rounded-xl bg-black/80 p-3 font-mono text-[11px] leading-relaxed text-emerald-300 space-y-1.5 border border-zinc-800/80">
+            {consoleLogs.map((logLine, i) => (
+              <div key={i} className="break-words">
+                {logLine}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {/* GENERATED CLIPS SECTION */}
       <div className="rounded-3xl border border-zinc-800 bg-[#18181B] p-6 shadow-2xl">
