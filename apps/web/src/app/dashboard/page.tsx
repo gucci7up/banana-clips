@@ -18,6 +18,7 @@ import {
   Layers,
   RefreshCw,
   ArrowUpRight,
+  Send,
 } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -25,6 +26,24 @@ export default function DashboardPage() {
   const [scope, setScope] = useState<'own' | 'global'>('own');
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [sendingTelegramId, setSendingTelegramId] = useState<string | null>(null);
+  const [telegramNotice, setTelegramNotice] = useState<string>('');
+
+  const handleSendToTelegram = async (clipId: string, clipTitle?: string) => {
+    setSendingTelegramId(clipId);
+    setTelegramNotice(`📱 Enviando "${clipTitle || 'clip'}" a tu Bot de Telegram...`);
+    try {
+      const res = await apiFetch<{ ok: boolean; message: string }>('/social/telegram-send', {
+        method: 'POST',
+        body: JSON.stringify({ clipId }),
+      });
+      setTelegramNotice(res.message || '✅ Video enviado a Telegram.');
+    } catch (err: any) {
+      setTelegramNotice(`⚠️ ${err?.message || 'Configura tu Bot Token en Publicaciones → Automatización Telegram'}`);
+    } finally {
+      setSendingTelegramId(null);
+    }
+  };
 
   const loadDashboard = async (targetScope: 'own' | 'global', silent = false) => {
     if (!silent) setLoading(true);
@@ -299,6 +318,12 @@ export default function DashboardPage() {
             </Link>
           </div>
 
+          {telegramNotice && (
+            <div className="mb-3 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3.5 py-2 text-xs font-bold text-sky-300">
+              {telegramNotice}
+            </div>
+          )}
+
           {loading ? (
             <div className="space-y-3">
               <div className="h-20 animate-pulse rounded-2xl bg-slate-800/50" />
@@ -329,7 +354,17 @@ export default function DashboardPage() {
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={sendingTelegramId === clip.id}
+                      onClick={() => handleSendToTelegram(clip.id, clip.title)}
+                      className="flex flex-1 sm:flex-initial items-center justify-center gap-1.5 rounded-xl border border-sky-500/40 bg-sky-500/15 px-3 py-2 text-xs font-bold text-sky-300 hover:bg-sky-500/30 disabled:opacity-50 transition"
+                      title="Enviar video MP4 directo a tu Telegram"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      <span>{sendingTelegramId === clip.id ? 'Enviando...' : '📱 Telegram'}</span>
+                    </button>
                     <Link
                       href={`/editor?clipId=${clip.id}`}
                       className="flex flex-1 sm:flex-initial items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs font-bold text-slate-200 hover:border-[#FFD43B] hover:text-white transition"

@@ -290,6 +290,29 @@ export default function AiClippingPage() {
   const [sortByScore, setSortByScore] = useState(true);
   const [assistantPrompt, setAssistantPrompt] = useState('');
   const [assistantReply, setAssistantReply] = useState<string | null>(null);
+  const [sendingTelegramId, setSendingTelegramId] = useState<string | null>(null);
+  const [telegramNotice, setTelegramNotice] = useState<string>('');
+
+  const handleSendClipToTelegram = async (clipId: string, clipTitle?: string) => {
+    setSendingTelegramId(clipId);
+    setTelegramNotice(`📱 Enviando "${clipTitle || 'clip'}" (MP4 + Copy Viral) a tu Bot de Telegram...`);
+    appendConsoleLog(`Enviando clip "${clipTitle || clipId}" a Telegram...`);
+    try {
+      const res = await apiFetch<{ ok: boolean; message: string }>('/social/telegram-send', {
+        method: 'POST',
+        body: JSON.stringify({ clipId }),
+      });
+      const msg = res.message || '✅ Video enviado a tu Telegram.';
+      setTelegramNotice(msg);
+      appendConsoleLog(`[TELEGRAM OK] ${msg}`);
+    } catch (err: any) {
+      const errMsg = `⚠️ ${err?.message || 'Configura tu Bot Token y Chat ID en Publicaciones → Automatización Telegram'}`;
+      setTelegramNotice(errMsg);
+      appendConsoleLog(`[TELEGRAM ERROR] ${errMsg}`);
+    } finally {
+      setSendingTelegramId(null);
+    }
+  };
 
   const loadData = async () => {
     const [vRes, cRes, pRes] = await Promise.all([
@@ -1939,16 +1962,30 @@ export default function AiClippingPage() {
                           </span>
                         </td>
                         <td className="py-2">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedVisualizerClipId(c.id);
-                            }}
-                            className="rounded bg-[#FFD43B] px-2 py-0.5 text-[10px] font-black text-[#111318]"
-                          >
-                            Ver 9:16
-                          </button>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedVisualizerClipId(c.id);
+                              }}
+                              className="rounded bg-[#FFD43B] px-2 py-0.5 text-[10px] font-black text-[#111318]"
+                            >
+                              Ver 9:16
+                            </button>
+                            <button
+                              type="button"
+                              disabled={sendingTelegramId === c.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSendClipToTelegram(c.id, c.title);
+                              }}
+                              title="Enviar este clip a tu Telegram"
+                              className="rounded border border-sky-500/40 bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-bold text-sky-300 hover:bg-sky-500/30 disabled:opacity-50"
+                            >
+                              {sendingTelegramId === c.id ? '⏳' : '📱 TG'}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -2000,6 +2037,16 @@ export default function AiClippingPage() {
                   >
                     <Download className="h-3.5 w-3.5" /> Descargar MP4
                   </a>
+                  <button
+                    type="button"
+                    disabled={sendingTelegramId === activeClip.id}
+                    onClick={() => handleSendClipToTelegram(activeClip.id, activeClip.title)}
+                    className="flex items-center gap-1 rounded-xl border border-sky-500/40 bg-sky-500/15 px-3 py-2 text-xs font-bold text-sky-300 hover:bg-sky-500/30 disabled:opacity-50"
+                    title="Enviar video MP4 directo a tu Telegram"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>{sendingTelegramId === activeClip.id ? 'Enviando...' : 'Telegram'}</span>
+                  </button>
                   <Link
                     href={`/editor?clipId=${activeClip.id}`}
                     className="rounded-xl border border-zinc-700 bg-[#1C1C21] px-3 py-2 text-xs font-bold text-white hover:border-[#FFD43B]"
@@ -2042,7 +2089,7 @@ export default function AiClippingPage() {
               Clips Generados ({sortedClips.length})
             </h2>
             <p className="text-xs text-zinc-400">
-              Con Subtítulos Animados Quemados (ASS), Banner de Hook Viral, AI B-Roll, Audio Enhancer y Exportación XML
+              Con Subtítulos Animados Quemados (ASS), Banner de Hook Viral, Envío Directo a Telegram y Exportación MP4/XML
             </p>
           </div>
           <button
@@ -2053,6 +2100,12 @@ export default function AiClippingPage() {
             Ordenar por: {sortByScore ? 'Virality Score™ (0-100)' : 'Fecha de Creación'}
           </button>
         </div>
+
+        {telegramNotice && (
+          <div className="mb-4 rounded-xl border border-sky-500/40 bg-sky-500/10 px-4 py-2.5 text-xs font-bold text-sky-300">
+            {telegramNotice}
+          </div>
+        )}
 
         {sortedClips.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-800 p-12 text-center text-xs text-zinc-400">
@@ -2133,6 +2186,17 @@ export default function AiClippingPage() {
                       <Download className="h-3.5 w-3.5" /> Descargar MP4
                     </a>
                   )}
+                  <button
+                    type="button"
+                    disabled={sendingTelegramId === clip.id}
+                    onClick={() => handleSendClipToTelegram(clip.id, clip.title)}
+                    data-testid="clip-telegram-btn"
+                    className="flex items-center gap-1 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-1.5 text-xs font-bold text-sky-300 hover:bg-sky-500/30 disabled:opacity-50"
+                    title="Enviar video MP4 + Copy Viral directo a tu Bot de Telegram"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>{sendingTelegramId === clip.id ? 'Enviando...' : '📱 Enviar a Telegram'}</span>
+                  </button>
                   <Link
                     href={`/ai-montage?addClipId=${clip.id}`}
                     className="flex items-center gap-1 rounded-lg border border-zinc-700 px-2 py-1.5 text-xs text-zinc-400 hover:text-white"
