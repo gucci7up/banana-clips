@@ -707,31 +707,35 @@ export function generateAssSubtitles(
     return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
   };
 
-  const primaryAss = hexToAssBgr(styleConfig.primaryColor);
-  let activeAss = hexToAssBgr(styleConfig.activeWordColor);
+  const primaryAss = hexToAssBgr(styleConfig.primaryColor || '#FFFFFF');
+  let activeAss = hexToAssBgr(styleConfig.activeWordColor || '#FFD43B');
   if (proOptions?.captionPresetId === 'MarkerSweep') {
-    activeAss = hexToAssBgr('#C084FC'); // OpusClip Purple Marker Sweep
+    activeAss = hexToAssBgr('#00FF55'); // Neon Green Impact (GTA 6 / Pure style)
   } else if (proOptions?.captionPresetId === 'NegativeKeywords') {
-    activeAss = hexToAssBgr('#FB923C'); // OpusClip Coral/Orange Negative Keywords
+    activeAss = hexToAssBgr('#FF2424'); // Viral Red Impact (Alofoke style)
   }
-  const outlineAss = hexToAssBgr(styleConfig.outlineColor);
-  const keywordAccentAss = hexToAssBgr('#00F5D4'); // 3rd color for OpusClip keyword highlighter
-  const marginV = Math.round(((100 - styleConfig.positionYPercent) / 100) * playResY);
+  const outlineAss = hexToAssBgr(styleConfig.outlineColor || '#000000');
+  const redAccentAss = hexToAssBgr('#FF2020'); // Alofoke Red
+  const greenAccentAss = hexToAssBgr('#00FF44'); // Pure GTA 6 Neon Green
+  const goldAccentAss = hexToAssBgr('#FFD43B'); // Viral Gold
 
-  const hookFontSize = Math.round(playResX * 0.046);
-  const hookBadgeFontSize = Math.round(playResX * 0.026);
-  const brandFontSize = Math.round(playResX * 0.032);
+  // Center-chest viral subtitle position (58% from top -> MarginV = 42% from bottom)
+  // Scale font size proportionally to PlayResX (1080p vs 720p)
+  const scaleFactor = playResX / 1080;
+  const effectiveFontSize = Math.round(Math.max(58, styleConfig.fontSize || 68) * scaleFactor);
+  const effectiveOutline = Math.max(4, Math.round(6 * scaleFactor));
+  const effectiveShadow = Math.max(2, Math.round(3 * scaleFactor));
+  const posPct = styleConfig.positionYPercent && styleConfig.positionYPercent <= 68 ? styleConfig.positionYPercent : 58;
+  const marginV = Math.round(((100 - posPct) / 100) * playResY);
+
+  const hookLine1Size = Math.round(playResX * 0.064);
+  const hookLine2Size = Math.round(playResX * 0.088);
+  const brandFontSize = Math.round(playResX * 0.030);
   const ctaFontSize = Math.round(playResX * 0.038);
 
-  // Hook Style variants matching OpusClip's 3 cards: Classic (top white box), Statement (left bold), Editorial (centered serif/italic)
-  const hookStyleMode = proOptions?.hookStyle || 'Classic';
-  let hookStyleLine = `Style: HookBanner,DejaVu Sans,${hookFontSize},&H00111318,&H003BD4FF,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,1,0,3,12,0,8,50,50,${Math.round(playResY * 0.095)},1`;
-  if (hookStyleMode === 'Statement') {
-    hookStyleLine = `Style: HookBanner,DejaVu Sans,${Math.round(hookFontSize * 1.12)},&H00FFFFFF,&H003BD4FF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,6,4,8,60,60,${Math.round(playResY * 0.095)},1`;
-  } else if (hookStyleMode === 'Editorial') {
-    hookStyleLine = `Style: HookBanner,DejaVu Serif,${Math.round(hookFontSize * 1.1)},&H003BD4FF,&H00FFFFFF,&H00000000,&H90000000,-1,-1,0,0,100,100,1,0,1,5,3,8,50,50,${Math.round(playResY * 0.095)},1`;
-  }
-  const hookBadgeStyleLine = `Style: HookBadge,DejaVu Sans,${hookBadgeFontSize},&H00111318,&H00FFFFFF,&H003BD4FF,&H003BD4FF,-1,0,0,0,100,100,2,0,3,8,0,8,40,40,${Math.round(playResY * 0.055)},1`;
+  // Condensed tall impact styles (ScaleX=86, ScaleY=108, BorderStyle=1 = clean outline + drop shadow, ZERO ugly opaque boxes!)
+  const hookStyleLine1 = `Style: HookLine1,DejaVu Sans,${hookLine1Size},&H00FFFFFF,&H002020FF,&H00000000,&H90000000,-1,0,0,0,86,108,1,0,1,${Math.round(effectiveOutline * 1.15)},${effectiveShadow + 1},5,40,40,${Math.round(playResY * 0.45)},1`;
+  const hookStyleLine2 = `Style: HookLine2,DejaVu Sans,${hookLine2Size},&H00FFFFFF,&H003BD4FF,&H00000000,&H90000000,-1,0,0,0,84,112,1,0,1,${Math.round(effectiveOutline * 1.3)},${effectiveShadow + 2},5,40,40,${Math.round(playResY * 0.54)},1`;
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -742,124 +746,71 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,${styleConfig.fontSize},${primaryAss},${activeAss},${outlineAss},&H80000000,-1,0,0,0,100,100,0,0,${styleConfig.backgroundBox ? 3 : 1},${styleConfig.outlineWidth},${styleConfig.shadowDepth},2,40,40,${marginV},1
-${hookStyleLine}
-${hookBadgeStyleLine}
-Style: BrandWatermark,DejaVu Sans,${brandFontSize},&H30FFFFFF,&H003BD4FF,&H60000000,&H80000000,-1,0,0,0,100,100,1,0,1,2,1,9,30,36,${Math.round(playResY * 0.035)},1
-Style: CtaBanner,DejaVu Sans,${ctaFontSize},&H00FFFFFF,&H003BD4FF,&H00000000,&HD0111318,-1,0,0,0,100,100,1,0,3,4,2,8,50,50,${Math.round(playResY * 0.11)},1
-Style: MotionGraphic,DejaVu Sans,${Math.round(playResX * 0.026)},&H003BD4FF,&H00FFFFFF,&H00111318,&HC0111318,-1,0,0,0,100,100,2,0,3,4,0,2,30,30,${Math.round(playResY * 0.03)},1
-Style: BrollCallout,DejaVu Sans,${Math.round(playResX * 0.029)},&H00111318,&H00FFFFFF,&H003BD4FF,&H003BD4FF,-1,0,0,0,100,100,2,0,3,10,0,8,40,40,${Math.round(playResY * 0.27)},1
+Style: Default,DejaVu Sans,${effectiveFontSize},${primaryAss},${activeAss},${outlineAss},&H90000000,-1,0,0,0,86,108,1,0,1,${effectiveOutline},${effectiveShadow},2,40,40,${marginV},1
+${hookStyleLine1}
+${hookStyleLine2}
+Style: BrandWatermark,DejaVu Sans,${brandFontSize},&H35FFFFFF,&H003BD4FF,&H70000000,&H80000000,-1,0,0,0,92,100,1,0,1,3,1,9,30,36,${Math.round(playResY * 0.035)},1
+Style: CtaBanner,DejaVu Sans,${ctaFontSize},&H00FFFFFF,&H003BD4FF,&H00000000,&H90000000,-1,0,0,0,88,105,1,0,1,${effectiveOutline},${effectiveShadow},2,50,50,${Math.round(playResY * 0.14)},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  const maxPerLine = styleConfig.maxWordsPerLine || 4;
   const events: string[] = [];
   const autoEmojis = proOptions?.autoEmojis !== false;
 
-  // Keyword & Emoji map (OpusClip Auto-Emoji + Keyword Highlighter + B-Roll Callouts)
-  const detectKeywordBadge = (rawWord: string): { isKeyword: boolean; badge?: string; calloutTitle?: string } => {
+  // Classify word for dynamic Viral Color Pop (Red / Neon Green / Gold) — NO ugly ASCII symbols!
+  const getWordImpactColorAss = (rawWord: string): string | null => {
     const clean = rawWord.toLowerCase().replace(/[^a-záéíóúñü0-9]/gi, '');
-    if (!clean || clean.length < 3) return { isKeyword: false };
-    if (/^(dinero|dolares|millones|inversion|negocio|rentabilizar|ventas|vending|precio|ganancia|money|dollars|million|billion|economy|tariff|tax)/.test(clean)) {
-      return { isKeyword: true, badge: '[$$]', calloutTitle: '$$ IMPACTO ECONOMICO CLAVE $$' };
+    if (!clean || clean.length < 3) return null;
+    if (/^[0-9]+$|^(dinero|dolares|millones|inversion|negocio|ventas|precio|ganancia|money|dollars|million|billion|fecha|gratis|oro|valor|vale)/.test(clean)) {
+      return greenAccentAss; // Neon Green for money/numbers/dates (like "¡FECHA!" / "50 MILLONES")
     }
-    if (/^(increible|epico|brutal|mejor|fuego|impactante|locura|maestra|eliminaciones|incredible|epic|better|great|amazing|historic|never)/.test(clean)) {
-      return { isKeyword: true, badge: '★', calloutTitle: '★ MOMENTO EPICO DETECTADO ★' };
+    if (/^(bloqueado|secreto|nunca|nadie|error|peligro|prohibido|verdad|mentira|pelea|guerra|rompio|muerte|fuego|brutal|locura|increible|epico|bomba|escandalo|jamas)/.test(clean)) {
+      return redAccentAss; // Viral Red for high-drama/conflict words (like "BLOQUEADO" / "BEST JUKES")
     }
-    if (/^(inteligencia|artificial|tecnologia|futuro|algoritmo|sistema|machine|intelligence|power|energy|world|country|america)/.test(clean)) {
-      return { isKeyword: true, badge: '⚡', calloutTitle: '⚡ DATO CLAVE EN DIRECTO ⚡' };
+    if (/^(importante|mira|escucha|ahora|siempre|mejor|ganar|victoria|exito|historia|mundo|presidente| Javi|anuel|karol|alofoke|gta)/i.test(clean)) {
+      return goldAccentAss; // Gold for key entities & hooks
     }
-    if (/^(rie|risa|carcajadas|gracioso|divertido|humor|equipo|laughs|team|people|everyone)/.test(clean)) {
-      return { isKeyword: true, badge: '✦', calloutTitle: '✦ REACCION VIRAL ✦' };
-    }
-    if (/^(ganar|victoria|logro|exito|celebracion|primero|primer|win|first|victory|deal|peace)/.test(clean)) {
-      return { isKeyword: true, badge: '★', calloutTitle: '★ PUNTO DECISIVO ★' };
-    }
-    return { isKeyword: false };
+    return null;
   };
 
-  // 1. Animated Viral Auto Hook Banner (First 3.8 seconds) with 5 Kinetic Animation Modes
+  // 1. Opening 2-Line Giant Impact Title (Alofoke / MLB / Pure style: Red + White Line 1, Giant White Line 2, ZERO background boxes!)
+  const hookDurationSec = proOptions?.hookBannerText ? 2.15 : 0;
   if (proOptions?.hookBannerText) {
     const cleanHook = proOptions.hookBannerText
-      .replace(/[{}]/g, '')
+      .replace(/[{}"]/g, '')
       .toUpperCase()
       .trim()
-      .slice(0, 52);
+      .slice(0, 44);
     const hookWords = cleanHook.split(/\s+/).filter(Boolean);
-    const animMode: HookAnimationMode = proOptions.hookAnimation || 'ELASTIC_POP';
     const cx = Math.round(playResX / 2);
-    const badgeY = Math.round(playResY * 0.065);
-    const line1Y = Math.round(playResY * 0.115);
-    const line2Y = Math.round(playResY * 0.172);
-    const line3Y = Math.round(playResY * 0.228);
+    const line1Y = Math.round(playResY * 0.50);
+    const line2Y = Math.round(playResY * 0.59);
 
-    // Top animated pill badge ("⚡ VIRAL HOOK ⚡")
-    events.push(
-      `Dialogue: 3,0:00:00.00,0:00:03.70,HookBadge,,0,0,0,,{\\an8\\pos(${cx},${badgeY})\\fscx0\\fscy0\\t(0,220,\\fscx118\\fscy118)\\t(220,380,\\fscx100\\fscy100)\\t(1400,2000,\\fscx106\\fscy106)\\t(2000,2600,\\fscx100\\fscy100)\\fad(60,280)} ⚡ VIRAL HOOK ⚡ `
-    );
+    if (hookWords.length >= 2) {
+      // Last 1 (or 2 short) words become the GIANT impact bottom line (like "BLOQUEADO")
+      const lastWord = hookWords[hookWords.length - 1];
+      const botWords = lastWord.length >= 6 || hookWords.length === 2 ? [lastWord] : hookWords.slice(-2);
+      const topWords = hookWords.slice(0, hookWords.length - botWords.length);
+      const redCount = Math.max(1, Math.ceil(topWords.length / 2));
+      const redPart = topWords.slice(0, redCount).join(' ');
+      const whitePart = topWords.slice(redCount).join(' ');
+      const topStyled = whitePart
+        ? `{\\1c${redAccentAss}}${redPart} {\\1c&H00FFFFFF&}${whitePart}`
+        : `{\\1c${redAccentAss}}${redPart}`;
+      const botText = botWords.join(' ');
 
-    if (animMode === 'KINETIC_WORDS' && hookWords.length >= 2) {
-      // Split into up to 3 staggered kinetic lines that pop in sequentially (0.00s, 0.22s, 0.44s)
-      const third = Math.max(1, Math.ceil(hookWords.length / 3));
-      const p1 = hookWords.slice(0, third).join(' ');
-      const p2 = hookWords.slice(third, third * 2).join(' ');
-      const p3 = hookWords.slice(third * 2).join(' ');
-
-      if (p1) {
-        events.push(
-          `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\move(${cx - 90},${line1Y},${cx},${line1Y},0,220)\\fscx40\\fscy40\\t(0,220,\\fscx118\\fscy118)\\t(220,360,\\fscx100\\fscy100)\\fad(60,260)} ${p1} `
-        );
-      }
-      if (p2) {
-        events.push(
-          `Dialogue: 2,0:00:00.20,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line2Y})\\1c&H003BD4FF&\\3c&H00111318&\\fscx10\\fscy10\\frz-3\\t(0,220,\\fscx126\\fscy126\\frz1)\\t(220,380,\\fscx100\\fscy100\\frz0)\\fad(60,260)} ${p2} `
-        );
-      }
-      if (p3) {
-        events.push(
-          `Dialogue: 2,0:00:00.40,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\move(${cx + 90},${line3Y},${cx},${line3Y},0,220)\\1c&H00D4F500&\\3c&H00111318&\\fscx40\\fscy40\\t(0,220,\\fscx120\\fscy120)\\t(220,360,\\fscx100\\fscy100)\\fad(60,260)} ${p3} `
-        );
-      }
-    } else if (animMode === 'SLIDE_IMPACT') {
-      const mid = Math.ceil(hookWords.length / 2);
-      const topPart = hookWords.slice(0, mid).join(' ');
-      const botPart = hookWords.slice(mid).join(' ');
       events.push(
-        `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\move(${cx},${Math.round(playResY * 0.02)},${cx},${line1Y},0,240)\\fscx135\\fscy135\\t(0,240,\\fscx94\\fscy94)\\t(240,380,\\fscx100\\fscy100)\\fad(50,280)} ${topPart} `
+        `Dialogue: 3,0:00:00.00,${formatAssTime(hookDurationSec)},HookLine1,,0,0,0,,{\\an5\\pos(${cx},${line1Y})\\fscx72\\fscy90\\t(0,140,\\fscx90\\fscy112)\\t(140,240,\\fscx86\\fscy108)\\fad(40,180)}${topStyled}`
       );
-      if (botPart) {
-        events.push(
-          `Dialogue: 2,0:00:00.16,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\move(${cx},${Math.round(playResY * 0.25)},${cx},${line2Y},0,240)\\1c&H003BD4FF&\\3c&H00111318&\\fscx130\\fscy130\\t(0,240,\\fscx100\\fscy100)\\fad(50,280)} ${botPart} `
-        );
-      }
-    } else if (animMode === 'NEON_PULSE') {
-      const mid = Math.ceil(hookWords.length / 2);
-      const topPart = hookWords.slice(0, mid).join(' ');
-      const botPart = hookWords.slice(mid).join(' ');
-      const combined = botPart ? `${topPart}\\N${botPart}` : topPart;
       events.push(
-        `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line1Y})\\blur14\\fscx130\\fscy130\\t(0,280,\\blur0\\fscx100\\fscy100)\\t(700,1400,\\fscx108\\fscy108\\1c&H003BD4FF&)\\t(1400,2100,\\fscx100\\fscy100\\1c&H00D4F500&)\\t(2100,2900,\\fscx106\\fscy106\\1c&H00FFFFFF&)\\fad(80,280)} ${combined} `
+        `Dialogue: 3,0:00:00.06,${formatAssTime(hookDurationSec)},HookLine2,,0,0,0,,{\\an5\\pos(${cx},${line2Y})\\fscx65\\fscy85\\t(0,160,\\fscx92\\fscy118)\\t(160,260,\\fscx84\\fscy112)\\fad(40,180)}${botText}`
       );
-    } else if (animMode === 'TYPEWRITER_SWEEP') {
-      const kTagged = hookWords.map((w) => `{\\k22}${w}`).join(' ');
+    } else if (hookWords.length === 1) {
       events.push(
-        `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line1Y})\\fscx85\\fscy85\\t(0,200,\\fscx104\\fscy104)\\t(200,350,\\fscx100\\fscy100)\\fad(60,260)} ${kTagged} `
+        `Dialogue: 3,0:00:00.00,${formatAssTime(hookDurationSec)},HookLine2,,0,0,0,,{\\an5\\pos(${cx},${line1Y})\\1c${greenAccentAss}\\fscx65\\fscy85\\t(0,160,\\fscx92\\fscy118)\\t(160,260,\\fscx84\\fscy112)\\fad(40,180)}${hookWords[0]}`
       );
-    } else {
-      // ELASTIC_POP (Default): 2-line elastic spring bounce with dynamic tilt & breathing pulse
-      const mid = Math.ceil(hookWords.length / 2);
-      const topPart = hookWords.slice(0, mid).join(' ');
-      const botPart = hookWords.slice(mid).join(' ');
-      events.push(
-        `Dialogue: 2,0:00:00.00,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line1Y})\\fscx10\\fscy10\\frz-4\\t(0,210,\\fscx124\\fscy124\\frz2)\\t(210,360,\\fscx100\\fscy100\\frz0)\\t(1200,1900,\\fscx105\\fscy105)\\t(1900,2600,\\fscx100\\fscy100)\\fad(60,260)} ${topPart} `
-      );
-      if (botPart) {
-        events.push(
-          `Dialogue: 2,0:00:00.16,0:00:03.75,HookBanner,,0,0,0,,{\\an8\\pos(${cx},${line2Y})\\1c&H003BD4FF&\\3c&H00111318&\\fscx10\\fscy10\\frz4\\t(0,220,\\fscx128\\fscy128\\frz-1)\\t(220,380,\\fscx100\\fscy100\\frz0)\\t(1300,2000,\\fscx106\\fscy106)\\t(2000,2700,\\fscx100\\fscy100)\\fad(60,260)} ${botPart} `
-        );
-      }
     }
   }
 
@@ -873,62 +824,73 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     );
   }
 
-  // 3. Final Call-To-Action (CTA) Outro Banner (Last 2.8 seconds) - only when explicitly enabled
-  if (proOptions?.ctaOutroText && totalClipSec >= 6) {
-    const ctaStart = Math.max(3.8, totalClipSec - 2.8);
-    const cleanCta = proOptions.ctaOutroText.replace(/[{}]/g, '').toUpperCase().slice(0, 54);
-    events.push(
-      `Dialogue: 2,${formatAssTime(ctaStart)},${formatAssTime(totalClipSec)},CtaBanner,,0,0,0,,{\\fad(200,200)}▶ ${cleanCta}`
-    );
+  // 3. Smart 1-to-2 Word Viral Grouping (Alofoke / Pure GTA 6 style: "ASIGNACIÓN", "MELODÍA", "ESCUCHANDO", "¡FECHA!")
+  // Long words (>= 6 chars) appear SOLO as a giant single word; short words pair up (max 2 words, <= 11 chars).
+  const smartGroups: WordTimestamp[][] = [];
+  let idx = 0;
+  while (idx < words.length) {
+    const wCurr = words[idx];
+    const cleanCurr = (wCurr.word || '').trim();
+    if (!cleanCurr) {
+      idx++;
+      continue;
+    }
+    const wNext = idx + 1 < words.length ? words[idx + 1] : null;
+    const cleanNext = wNext ? (wNext.word || '').trim() : '';
+    const gapToNext = wNext ? wNext.start - wCurr.end : 99;
+
+    if (
+      wNext &&
+      cleanCurr.length <= 4 &&
+      cleanCurr.length + cleanNext.length <= 11 &&
+      gapToNext <= 0.35 &&
+      !/[.?!,;:]/.test(cleanCurr)
+    ) {
+      smartGroups.push([wCurr, wNext]);
+      idx += 2;
+    } else {
+      smartGroups.push([wCurr]);
+      idx += 1;
+    }
   }
 
-  // 4. Word-by-word Karaoke + Keyword Highlighter + Auto Badges + Floating B-Roll Callouts
-  let lastCalloutEndSec = 3.6;
-  const cxCallout = Math.round(playResX / 2);
-  const cyCallout = Math.round(playResY * 0.27);
-
-  for (let i = 0; i < words.length; i += maxPerLine) {
-    const group = words.slice(i, i + maxPerLine);
+  for (const group of smartGroups) {
     if (group.length === 0) continue;
-
-    let groupBadge = '';
-    if (autoEmojis) {
-      for (const gw of group) {
-        const kw = detectKeywordBadge(gw.word);
-        if (kw.badge) {
-          groupBadge = ` {\\c${activeAss}}${kw.badge}{\\c${primaryAss}}`;
-          if (kw.calloutTitle && gw.start >= lastCalloutEndSec + 1.4 && gw.start < totalClipSec - 2.5) {
-            const cStart = gw.start;
-            const cEnd = Math.min(totalClipSec - 0.5, cStart + 2.1);
-            lastCalloutEndSec = cEnd;
-            events.push(
-              `Dialogue: 3,${formatAssTime(cStart)},${formatAssTime(cEnd)},BrollCallout,,0,0,0,,{\\an8\\pos(${cxCallout},${cyCallout})\\fscx20\\fscy20\\t(0,180,\\fscx114\\fscy114)\\t(180,320,\\fscx100\\fscy100)\\fad(50,220)} ${kw.calloutTitle} `
-            );
-          }
-          break;
-        }
-      }
+    // Avoid overlapping with the giant 2-line opening hook during the first 1.85s
+    if (hookDurationSec > 0 && group[group.length - 1].end <= 1.85) {
+      continue;
     }
 
-    for (let activeIdx = 0; activeIdx < group.length; activeIdx++) {
-      const wStart = group[activeIdx].start;
-      const wEnd = group[activeIdx].end;
-      const renderedWords = group
-        .map((w, idx) => {
-          const kw = autoEmojis ? detectKeywordBadge(w.word) : { isKeyword: false };
-          if (idx === activeIdx) {
-            const highlightColor = kw.isKeyword ? keywordAccentAss : activeAss;
-            return `{\\c${highlightColor}\\fscx112\\fscy112}${w.word}{\\c${primaryAss}\\fscx100\\fscy100}`;
-          }
-          if (kw.isKeyword) {
-            return `{\\c${keywordAccentAss}}${w.word}{\\c${primaryAss}}`;
-          }
-          return w.word;
-        })
-        .join(' ');
+    if (group.length === 1) {
+      const w = group[0];
+      const wStart = Math.max(hookDurationSec > 0 ? 1.85 : 0, w.start);
+      const wEnd = Math.max(wStart + 0.14, w.end);
+      const upperWord = w.word.toUpperCase();
+      const impactColor = autoEmojis ? getWordImpactColorAss(w.word) : null;
+      const colorTag = impactColor ? `\\1c${impactColor}` : `\\1c${primaryAss}`;
       events.push(
-        `Dialogue: 0,${formatAssTime(wStart)},${formatAssTime(wEnd)},Default,,0,0,0,,${renderedWords}${groupBadge}`
+        `Dialogue: 2,${formatAssTime(wStart)},${formatAssTime(wEnd)},Default,,0,0,0,,{${colorTag}\\fscx78\\fscy98\\t(0,75,\\fscx92\\fscy116)\\t(75,150,\\fscx86\\fscy108)}${upperWord}`
       );
+    } else {
+      for (let activeIdx = 0; activeIdx < group.length; activeIdx++) {
+        const wStart = Math.max(hookDurationSec > 0 ? 1.85 : 0, group[activeIdx].start);
+        const wEnd = Math.max(wStart + 0.12, group[activeIdx].end);
+        if (wEnd <= wStart + 0.04) continue;
+        const renderedWords = group
+          .map((w, gIdx) => {
+            const upperWord = w.word.toUpperCase();
+            const impactColor = autoEmojis ? getWordImpactColorAss(w.word) : null;
+            if (gIdx === activeIdx) {
+              const hiColor = impactColor || activeAss;
+              return `{\\1c${hiColor}\\fscx90\\fscy114}${upperWord}{\\1c${primaryAss}\\fscx86\\fscy108}`;
+            }
+            return `{\\1c${primaryAss}}${upperWord}`;
+          })
+          .join(' ');
+        events.push(
+          `Dialogue: 2,${formatAssTime(wStart)},${formatAssTime(wEnd)},Default,,0,0,0,,${renderedWords}`
+        );
+      }
     }
   }
 
@@ -953,6 +915,7 @@ export type WatermarkPosition =
 export type SplitScreenRetentionMode =
   | 'NONE'
   | 'STREAMER_FACECAM_SPLIT'
+  | 'WIDE_ACTION_BLUR'
   | 'HYPNOTIC_TUNNEL'
   | 'NEON_RAMP'
   | 'GAMEPLAY_PARKOUR';
@@ -1788,13 +1751,15 @@ export interface StreamerFacecamBox {
   h: number;
 }
 
+export interface ShotCropKeyframe {
+  endSec: number;
+  cropX: number;
+}
+
 /**
- * Real Active Speaker Face + Mouth Motion Detector + Automatic Gameplay Streamer Facecam (PiP) Detector
+ * Real Active Speaker Face + Mouth Motion Detector + Multi-Shot Camera Cut Tracker +
+ * Automatic Gameplay Streamer Facecam (PiP) & Wide Sports/Trailer Detector
  * (Python + OpenCV + NumPy + Claude 5.5 Haiku Vision).
- * 1) Detects if the 16:9 video is a Gameplay / Stream with an active Streamer Webcam (Facecam) in a corner/edge,
- *    returning the exact normalized bounding box `facecamBox: {x, y, w, h}` so FFmpeg cuts the 9:16 screen into 2:
- *    Streamer Webcam on Top + Gameplay Action on Bottom.
- * 2) Otherwise, locks the 9:16 vertical crop directly onto the person speaking (zero side-to-side swaying).
  */
 export function detectActiveSpeakerTrackSync(
   sourceVideoPath: string,
@@ -1806,8 +1771,10 @@ export function detectActiveSpeakerTrackSync(
   switchSec: number;
   isTwoSpeakerDialogue: boolean;
   isGameplayWithFacecam: boolean;
+  isWideActionOrSports: boolean;
   facecamBox: StreamerFacecamBox;
   gameplayCenterX: number;
+  shotKeyframes: ShotCropKeyframe[];
 } {
   const safeDur = Math.max(2, Math.min(45, Number(durationSec) || 15));
   const halfDur = Number((safeDur / 2).toFixed(2));
@@ -1817,8 +1784,10 @@ export function detectActiveSpeakerTrackSync(
     switchSec: halfDur,
     isTwoSpeakerDialogue: false,
     isGameplayWithFacecam: false,
+    isWideActionOrSports: false,
     facecamBox: { x: 0.02, y: 0.04, w: 0.26, h: 0.42 },
     gameplayCenterX: 0.55,
+    shotKeyframes: [{ endSec: safeDur, cropX: 0.5 }],
   };
 
   if (!sourceVideoPath || !fs.existsSync(sourceVideoPath)) {
@@ -1834,12 +1803,13 @@ start_sec = float(sys.argv[2])
 dur_sec = float(sys.argv[3])
 anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
+fps = 3.0
 cmd = [
     "ffmpeg", "-nostdin", "-v", "error",
     "-ss", str(max(0.0, start_sec)),
     "-i", video_path,
-    "-t", str(min(24.0, dur_sec)),
-    "-vf", "fps=3,scale=320:180",
+    "-t", str(min(30.0, dur_sec)),
+    "-vf", f"fps={int(fps)},scale=320:180",
     "-f", "rawvideo", "-pix_fmt", "rgb24", "-"
 ]
 proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=16)
@@ -1847,19 +1817,20 @@ raw = proc.stdout
 frame_size = 320 * 180 * 3
 n_frames = len(raw) // frame_size
 if n_frames < 3:
-    print(json.dumps({"firstHalfX": 0.5, "secondHalfX": 0.5, "isTwo": False, "isGameplayWithFacecam": False}))
+    print(json.dumps({"firstHalfX": 0.5, "secondHalfX": 0.5, "isTwo": False, "isGameplayWithFacecam": False, "isWideActionOrSports": False, "shotKeyframes": [{"endSec": dur_sec, "cropX": 0.5}]}))
     sys.exit(0)
 
 frames = np.frombuffer(raw[:n_frames * frame_size], dtype=np.uint8).reshape((n_frames, 180, 320, 3)).astype(np.float32)
 
 # 1. Local OpenCV + Persistent PiP Box + Skin/Motion Analysis
 is_facecam = False
+is_wide_action = False
 facecam_box = {"x": 0.02, "y": 0.04, "w": 0.26, "h": 0.42}
 gameplay_cx = 0.55
 
 try:
     import cv2
-    gray_frames = [cv2.cvtColor(frames[i].astype(np.uint8), cv2.COLOR_RGB2GRAY) for i in range(min(n_frames, 10))]
+    gray_frames = [cv2.cvtColor(frames[i].astype(np.uint8), cv2.COLOR_RGB2GRAY) for i in range(min(n_frames, 12))]
     cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     face_cascade = cv2.CascadeClassifier(cascade_path)
     corner_faces = []
@@ -1870,13 +1841,11 @@ try:
             fcx = (fx + fw * 0.5) / 320.0
             fcy = (fy + fh * 0.5) / 180.0
             fwr = fw / 320.0
-            # Small/medium face in a corner or edge zone = Streamer Webcam!
             if 0.04 <= fwr <= 0.23 and (fcx < 0.37 or fcx > 0.63 or fcy < 0.43 or fcy > 0.62):
                 corner_faces.append((fcx, fcy, fwr, fh / 180.0))
             elif fwr > 0.23:
                 large_faces.append((fcx, fcy, fwr, fh / 180.0))
 
-    # Measure background gameplay motion vs corner box stability
     full_motion = np.abs(np.diff(frames, axis=0)).mean()
     if len(corner_faces) >= 2 and len(large_faces) == 0 and full_motion > 2.2:
         med_cx = float(np.median([f[0] for f in corner_faces]))
@@ -1893,8 +1862,7 @@ try:
 except Exception:
     pass
 
-# 2. Claude 5.5 Haiku Vision Check (1 single 480x270 JPEG frame) for 100% Streamer Webcam + Gameplay accuracy
-# Detects even when streamer wears a cap pulled down, headphones, microphone, or angled webcam!
+# 2. Claude 5.5 Haiku Vision Check (1 single 480x270 JPEG frame) for 100% Streamer Webcam + Gameplay / Sports / Interview classification
 if anthropic_key:
     try:
         mid_t = max(0.0, start_sec + min(10.0, dur_sec * 0.35))
@@ -1908,7 +1876,7 @@ if anthropic_key:
             b64_img = base64.b64encode(jpg_proc.stdout).decode("ascii")
             payload = {
                 "model": "claude-haiku-5-5",
-                "max_tokens": 180,
+                "max_tokens": 200,
                 "thinking": {"type": "disabled"},
                 "messages": [{
                     "role": "user",
@@ -1919,7 +1887,7 @@ if anthropic_key:
                         },
                         {
                             "type": "text",
-                            "text": "Analyze this 16:9 video frame. Is it a gameplay or live reaction stream with a small/medium rectangular streamer webcam overlay (facecam box with a person inside) in one of the corners or edges while gameplay/content fills the rest of the screen? Return ONLY valid JSON: {\\"isGameplayWithFacecam\\": boolean, \\"facecamBox\\": {\\"x\\": 0.02, \\"y\\": 0.04, \\"w\\": 0.25, \\"h\\": 0.42}, \\"gameplayCenterX\\": 0.56, \\"speakerX\\": 0.50}. Note: x,y,w,h are normalized 0.0 to 1.0 coordinates of the streamer's webcam rectangle."
+                            "text": "Analyze this 16:9 video frame. Classify it: 1) Is it a gameplay/live stream with a small rectangular streamer webcam overlay (facecam box with a person inside) in a corner/edge? 2) Or is it wide sports/game trailer action where cropping tightly would cut off the play/characters (`isWideActionOrSports`: true)? 3) Or is it a podcast/interview/talking-head video? Return ONLY valid JSON: {\\"isGameplayWithFacecam\\": boolean, \\"isWideActionOrSports\\": boolean, \\"facecamBox\\": {\\"x\\": 0.02, \\"y\\": 0.04, \\"w\\": 0.25, \\"h\\": 0.42}, \\"gameplayCenterX\\": 0.56, \\"speakerX\\": 0.50}."
                         }
                     ]
                 }]
@@ -1944,6 +1912,8 @@ if anthropic_key:
                     parsed_v = json.loads(txt[s_idx:e_idx+1])
                     if isinstance(parsed_v.get("isGameplayWithFacecam"), bool):
                         is_facecam = parsed_v["isGameplayWithFacecam"]
+                    if isinstance(parsed_v.get("isWideActionOrSports"), bool) and not is_facecam:
+                        is_wide_action = parsed_v["isWideActionOrSports"]
                     if is_facecam and isinstance(parsed_v.get("facecamBox"), dict):
                         fb = parsed_v["facecamBox"]
                         bw = max(0.18, min(0.45, float(fb.get("w", 0.26))))
@@ -1955,47 +1925,70 @@ if anthropic_key:
     except Exception:
         pass
 
-# 3. Active Speaker Horizontal Tracking for full-screen IRL / Podcast videos
+# 3. Shot-by-Shot Camera Cut & Active Speaker Tracking (Alofoke / Podcast multi-camera style!)
 roi = frames[:, 12:124, :, :]
 R, G, B = roi[:, :, :, 0], roi[:, :, :, 1], roi[:, :, :, 2]
 skin = ((R > 75) & (G > 30) & (B > 18) & (R > G) & (R > B) & ((R - G) > 10)).astype(np.float32)
 motion = np.abs(np.diff(roi, axis=0)).mean(axis=3)
 skin_mid = skin[1:]
 activity = motion * (1.0 + 4.5 * skin_mid) + (skin_mid * 6.0)
-
-col_activity = activity.mean(axis=1)
+col_activity = activity.mean(axis=1) # shape (n_frames-1, 320)
 kernel = np.ones(40, dtype=np.float32) / 40.0
-
-mid_idx = max(1, (n_frames - 1) // 2)
-first_prof = np.convolve(col_activity[:mid_idx].mean(axis=0), kernel, mode='same')
-second_prof = np.convolve(col_activity[mid_idx:].mean(axis=0), kernel, mode='same')
-
 margin = 26
-x1 = int(np.argmax(first_prof[margin:320-margin]) + margin) / 320.0
-x2 = int(np.argmax(second_prof[margin:320-margin]) + margin) / 320.0
 
 def to_crop_ratio(x_img):
     r = (x_img - 0.16) / 0.68
     return float(max(0.05, min(0.95, r)))
 
-c1 = to_crop_ratio(x1)
-c2 = to_crop_ratio(x2)
-
-if abs(c1 - c2) < 0.18:
-    avg_c = round((c1 + c2) / 2.0, 3)
-    c1, c2 = avg_c, avg_c
-    is_two = False
+# Detect scene cuts (frame-to-frame luminance jumps > 26.0) or split into ~3.0s shots
+frame_diffs = np.abs(np.diff(frames.mean(axis=3), axis=0)).mean(axis=(1, 2))
+cut_indices = [0]
+for idx_f in range(1, len(frame_diffs)):
+    if frame_diffs[idx_f] > 26.0 and (idx_f - cut_indices[-1]) >= 4:
+        cut_indices.append(idx_f)
+    elif (idx_f - cut_indices[-1]) >= 9: # max 3.0s per shot window
+        cut_indices.append(idx_f)
+if (n_frames - 1) - cut_indices[-1] >= 3:
+    cut_indices.append(n_frames - 1)
 else:
-    c1, c2 = round(c1, 3), round(c2, 3)
-    is_two = True
+    cut_indices[-1] = n_frames - 1
+
+shot_keyframes = []
+for s_i in range(len(cut_indices) - 1):
+    f_start = cut_indices[s_i]
+    f_end = max(f_start + 1, cut_indices[s_i + 1])
+    prof = np.convolve(col_activity[f_start:f_end].mean(axis=0), kernel, mode='same')
+    x_img = int(np.argmax(prof[margin:320-margin]) + margin) / 320.0
+    c_ratio = round(to_crop_ratio(x_img), 3)
+    end_t = round(min(dur_sec, (f_end / fps)), 2)
+    if shot_keyframes and abs(shot_keyframes[-1]["cropX"] - c_ratio) < 0.14:
+        # Merge adjacent shots if speaker hasn't changed position (anti-sway lock!)
+        shot_keyframes[-1]["endSec"] = end_t
+    else:
+        shot_keyframes.append({"endSec": end_t, "cropX": c_ratio})
+
+if not shot_keyframes:
+    shot_keyframes = [{"endSec": round(dur_sec, 2), "cropX": 0.5}]
+else:
+    shot_keyframes[-1]["endSec"] = round(dur_sec, 2)
+
+# Cap at max 6 keyframes for clean FFmpeg expression
+shot_keyframes = shot_keyframes[:6]
+shot_keyframes[-1]["endSec"] = round(dur_sec, 2)
+
+c1 = shot_keyframes[0]["cropX"]
+c2 = shot_keyframes[-1]["cropX"]
+is_two = len(shot_keyframes) >= 2 and any(abs(k["cropX"] - c1) >= 0.16 for k in shot_keyframes)
 
 print(json.dumps({
     "firstHalfX": c1,
     "secondHalfX": c2,
     "isTwo": is_two,
     "isGameplayWithFacecam": is_facecam,
+    "isWideActionOrSports": is_wide_action,
     "facecamBox": facecam_box,
-    "gameplayCenterX": round(gameplay_cx, 3)
+    "gameplayCenterX": round(gameplay_cx, 3),
+    "shotKeyframes": shot_keyframes
 }))
 `;
 
@@ -2010,12 +2003,21 @@ print(json.dumps({
       if (m) {
         const parsed = JSON.parse(m[0]);
         const fb = parsed.facecamBox || fallback.facecamBox;
+        const rawKf = Array.isArray(parsed.shotKeyframes) ? parsed.shotKeyframes : [];
+        const shotKeyframes: ShotCropKeyframe[] =
+          rawKf.length > 0
+            ? rawKf.map((k: any) => ({
+                endSec: Math.max(0.5, Number(k.endSec || safeDur)),
+                cropX: Math.max(0.05, Math.min(0.95, Number(k.cropX ?? 0.5))),
+              }))
+            : [{ endSec: safeDur, cropX: Math.max(0.05, Math.min(0.95, Number(parsed.firstHalfX ?? 0.5))) }];
         return {
           firstHalfX: Math.max(0.05, Math.min(0.95, Number(parsed.firstHalfX ?? 0.5))),
           secondHalfX: Math.max(0.05, Math.min(0.95, Number(parsed.secondHalfX ?? 0.5))),
           switchSec: halfDur,
           isTwoSpeakerDialogue: Boolean(parsed.isTwo),
           isGameplayWithFacecam: Boolean(parsed.isGameplayWithFacecam),
+          isWideActionOrSports: Boolean(parsed.isWideActionOrSports),
           facecamBox: {
             x: Math.max(0, Math.min(0.85, Number(fb.x ?? 0.02))),
             y: Math.max(0, Math.min(0.85, Number(fb.y ?? 0.04))),
@@ -2023,6 +2025,7 @@ print(json.dumps({
             h: Math.max(0.2, Math.min(0.6, Number(fb.h ?? 0.42))),
           },
           gameplayCenterX: Math.max(0.2, Math.min(0.8, Number(parsed.gameplayCenterX ?? 0.55))),
+          shotKeyframes,
         };
       }
     }
@@ -2744,15 +2747,39 @@ export function renderClipWithFfmpeg(params: {
   const xRatio1 = Number(Math.max(0.05, Math.min(0.95, spk1 ?? 0.5)).toFixed(3));
   const xRatio2 = Number(Math.max(0.05, Math.min(0.95, spk2 ?? xRatio1)).toFixed(3));
   const switchSec = Number((clipDur / 2).toFixed(2));
-  const xExpr =
+
+  // Build multi-shot piecewise-constant FFmpeg xExpr from shotKeyframes (Alofoke multi-camera interview style!)
+  let xExpr =
     Math.abs(xRatio1 - xRatio2) < 0.08
       ? `(in_w-out_w)*${xRatio1}`
       : `if(lt(t,${switchSec}),(in_w-out_w)*${xRatio1},(in_w-out_w)*${xRatio2})`;
+
+  if (
+    params.speakerFirstHalfX === undefined &&
+    params.centerXNormalized === undefined &&
+    trackedResult?.shotKeyframes &&
+    trackedResult.shotKeyframes.length >= 2
+  ) {
+    const kfs = trackedResult.shotKeyframes;
+    let expr = `(in_w-out_w)*${Number(kfs[kfs.length - 1].cropX).toFixed(3)}`;
+    for (let k = kfs.length - 2; k >= 0; k--) {
+      const tCut = Number(kfs[k].endSec).toFixed(2);
+      const cxVal = Number(kfs[k].cropX).toFixed(3);
+      expr = `if(lt(t,${tCut}),(in_w-out_w)*${cxVal},${expr})`;
+    }
+    xExpr = expr;
+  }
 
   const useStreamerFacecamSplit =
     params.aspectRatio === '9:16' &&
     (params.splitScreenMode === 'STREAMER_FACECAM_SPLIT' ||
       ((!params.splitScreenMode || params.splitScreenMode === 'NONE') && Boolean(trackedResult?.isGameplayWithFacecam)));
+
+  const useWideActionBlur =
+    !useStreamerFacecamSplit &&
+    params.aspectRatio === '9:16' &&
+    (params.splitScreenMode === 'WIDE_ACTION_BLUR' ||
+      ((!params.splitScreenMode || params.splitScreenMode === 'NONE') && Boolean(trackedResult?.isWideActionOrSports)));
 
   // When Gameplay + Streamer Facecam Split is active, position subtitles right on the center split seam
   // and keep the top streamer webcam free from top-box overlays (matching viral Kick/Twitch split shorts!)
@@ -2768,7 +2795,7 @@ export function renderClipWithFfmpeg(params: {
       );
       assRaw = assRaw
         .split(/\r?\n/)
-        .filter((line) => !/^Dialogue:\s*\d+,[^,]+,[^,]+,(HookBanner|HookBadge),/.test(line))
+        .filter((line) => !/^Dialogue:\s*\d+,[^,]+,[^,]+,(HookBanner|HookBadge|HookLine1|HookLine2),/.test(line))
         .join('\n');
       fs.writeFileSync(params.subtitleAssPath, assRaw, 'utf-8');
     } catch {}
@@ -2838,10 +2865,12 @@ export function renderClipWithFfmpeg(params: {
   const resolvedStorageDir = params.storageDir || path.dirname(path.dirname(params.outputVideoPath));
   const useSplitScreen =
     !useStreamerFacecamSplit &&
+    !useWideActionBlur &&
     Boolean(params.splitScreenMode && params.splitScreenMode !== 'NONE') &&
     params.aspectRatio === '9:16';
   const useTwoSpeakerStack =
     !useStreamerFacecamSplit &&
+    !useWideActionBlur &&
     !useSplitScreen &&
     params.aspectRatio === '9:16' &&
     params.reframeMode === 'LEVEL_3_SMART_SPLIT_COMPOSITION';
@@ -2888,6 +2917,31 @@ export function renderClipWithFfmpeg(params: {
       postStackParts.push(`setpts=${(1 / params.speed).toFixed(3)}*PTS`);
     }
     const filterComplex = `[0:v]split=2[vcam][vgame];[vcam]crop=iw*${camW}:ih*${camH}:iw*${camX}:ih*${camY},scale=${targetW}:${topH}:force_original_aspect_ratio=increase,crop=${targetW}:${topH}:x='(in_w-out_w)/2':y='(in_h-out_h)*0.22'[topv];[vgame]scale=${targetW}:${botH}:force_original_aspect_ratio=increase,crop=${targetW}:${botH}:x='(in_w-out_w)*${gameCropX}':y='(in_h-out_h)*0.54'[botv];[topv][botv]vstack=inputs=2,${postStackParts.join(',')}[vout]`;
+    args.push('-t', String(clipDur), '-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?');
+  } else if (useWideActionBlur) {
+    // Sports / Wide Action / Game Trailer Mode (MLB & GTA 6 style):
+    // 9:16 Blurred Ambient Backdrop + Wide 3:4 Action Center Frame so horizontal action is never cut off!
+    const actionH = Math.floor(targetH * 0.68) - (Math.floor(targetH * 0.68) % 2);
+    const postParts: string[] = [];
+    if (useColor) {
+      postParts.push('eq=saturation=1.22:contrast=1.08:brightness=0.02');
+    }
+    if (useTransitions) {
+      const fadeOutStart = Math.max(0.5, clipDur - 0.5).toFixed(2);
+      postParts.push(`fade=t=in:st=0:d=0.4,fade=t=out:st=${fadeOutStart}:d=0.4`);
+    }
+    if (params.subtitleAssPath && fs.existsSync(params.subtitleAssPath)) {
+      const escapedAss = params.subtitleAssPath
+        .replace(/\\/g, '/')
+        .replace(/:/g, '\\:')
+        .replace(/'/g, "\\'");
+      postParts.push(`ass='${escapedAss}'`);
+    }
+    if (params.speed && params.speed !== 1 && params.speed >= 0.5 && params.speed <= 2.0) {
+      postParts.push(`setpts=${(1 / params.speed).toFixed(3)}*PTS`);
+    }
+    const postFilter = postParts.length > 0 ? `,${postParts.join(',')}` : '';
+    const filterComplex = `[0:v]split=2[vbg][vfg];[vbg]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},boxblur=22:3,eq=brightness=-0.10:saturation=1.15[bg];[vfg]scale=${targetW}:${actionH}:force_original_aspect_ratio=increase,crop=${targetW}:${actionH}:x='${xExpr}':y='(in_h-out_h)/2'[fg];[bg][fg]overlay=0:(H-h)/2${postFilter}[vout]`;
     args.push('-t', String(clipDur), '-filter_complex', filterComplex, '-map', '[vout]', '-map', '0:a?');
   } else if (useTwoSpeakerStack) {
     // 2-Speaker Podcast Vertical Stack: Left Speaker on Top Half, Right Speaker on Bottom Half

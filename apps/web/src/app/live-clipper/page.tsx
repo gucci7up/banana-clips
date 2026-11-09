@@ -325,8 +325,9 @@ export default function LiveClipperPage() {
                   onChange={(e) => setSplitScreenMode(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-[#111318] p-2 text-[11px] font-bold text-white"
                 >
-                  <option value="NONE">✨ Auto (Detecta Cámara Streamer + Gameplay o Hablante)</option>
+                  <option value="NONE">✨ Auto (Detecta Cámara Streamer + Gameplay, Podcast o Deportes)</option>
                   <option value="STREAMER_FACECAM_SPLIT">📹 Forzar Split: Cámara Streamer Arriba + Gameplay Abajo</option>
+                  <option value="WIDE_ACTION_BLUR">🏟️ Modo Deportes / Trailer Wide (Fondo Blur + Acción Completa)</option>
                   <option value="HYPNOTIC_TUNNEL">🌀 Túnel Hipnótico 50/50</option>
                   <option value="NEON_RAMP">🌈 Rampa Neón 50/50</option>
                   <option value="GAMEPLAY_PARKOUR">🕹️ Arcade Loop 50/50</option>

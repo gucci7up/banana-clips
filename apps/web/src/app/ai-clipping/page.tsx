@@ -1266,8 +1266,9 @@ export default function AiClippingPage() {
                   onChange={(e) => setSplitScreenMode(e.target.value)}
                   className="rounded-lg border border-zinc-700 bg-[#18181B] px-2.5 py-1.5 text-xs font-bold text-[#FFD43B]"
                 >
-                  <option value="NONE">✨ Auto (Detecta Cámara Streamer + Gameplay o Hablante)</option>
+                  <option value="NONE">✨ Auto (Detecta Cámara Streamer + Gameplay, Podcast o Deportes)</option>
                   <option value="STREAMER_FACECAM_SPLIT">📹 Forzar Split: Cámara Streamer Arriba + Gameplay Abajo</option>
+                  <option value="WIDE_ACTION_BLUR">🏟️ Modo Deportes / Trailer Wide (Fondo Blur + Acción Completa)</option>
                   <option value="HYPNOTIC_TUNNEL">🌀 Túnel Hipnótico 50/50</option>
                   <option value="NEON_RAMP">🌈 Rampa Neón 50/50</option>
                   <option value="GAMEPLAY_PARKOUR">🕹️ Arcade Loop 50/50</option>
