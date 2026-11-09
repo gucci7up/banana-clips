@@ -7,15 +7,10 @@ import {
   Lock,
   ShieldAlert,
   ArrowRight,
-  Sparkles,
-  Film,
-  Subtitles,
-  Cpu,
   User,
   KeyRound,
   Eye,
   EyeOff,
-  CheckCircle2,
 } from 'lucide-react';
 
 export default function LoginPage() {
@@ -58,20 +53,14 @@ export default function LoginPage() {
 
       <div className="relative z-10 grid w-full max-w-5xl grid-cols-1 overflow-hidden rounded-3xl border border-zinc-800/80 bg-[#121318]/90 shadow-[0_25px_80px_-15px_rgba(0,0,0,0.85)] backdrop-blur-xl lg:grid-cols-12">
         {/* LEFT SHOWCASE PANEL (7 cols on desktop) */}
-        <div className="relative flex flex-col justify-between border-b border-zinc-800/70 bg-gradient-to-br from-[#16181F] via-[#121318] to-[#1A160B] p-8 sm:p-10 lg:col-span-7 lg:border-b-0 lg:border-r">
+        <div className="relative flex flex-col items-center justify-center border-b border-zinc-800/70 bg-gradient-to-br from-[#16181F] via-[#121318] to-[#1A160B] p-8 sm:p-12 lg:col-span-7 lg:border-b-0 lg:border-r">
           <div className="flex flex-col items-center text-center">
-            {/* Top Status Badge */}
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#FFD43B]/30 bg-[#FFD43B]/10 px-4 py-1 text-xs font-bold text-[#FFD43B]">
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>AI VIDEO CLIPPING STUDIO • SELF-HOSTED</span>
-            </div>
-
             {/* Official Banana Clips Logo — Centered */}
-            <div className="my-6 flex w-full items-center justify-center">
+            <div className="mb-8 flex w-full items-center justify-center">
               <img
                 src="/banana-clips-logo.png"
                 alt="Banana Clips Logo"
-                className="h-32 w-auto max-w-full object-contain drop-shadow-[0_15px_40px_rgba(255,212,59,0.35)] transition-transform duration-300 hover:scale-[1.03] sm:h-40"
+                className="h-36 w-auto max-w-full object-contain drop-shadow-[0_15px_40px_rgba(255,212,59,0.35)] transition-transform duration-300 hover:scale-[1.03] sm:h-44"
               />
             </div>
 
@@ -81,37 +70,9 @@ export default function LoginPage() {
                 clips virales con IA
               </span>
             </h1>
-            <p className="mt-2.5 max-w-lg text-sm leading-relaxed text-zinc-400">
-              Suite privada de recorte inteligente, reencuadre vertical 9:16 automático, subtítulos animados palabra por palabra con Faster-Whisper y edición no destructiva acelerada por GPU.
+            <p className="mt-3 max-w-md text-sm leading-relaxed text-zinc-400">
+              Suite privada de recorte inteligente, reencuadre vertical 9:16 automático, subtítulos animados palabra por palabra y edición acelerada.
             </p>
-          </div>
-
-          {/* Feature Highlights */}
-          <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div className="rounded-2xl border border-zinc-800/90 bg-[#181A20]/90 p-3.5">
-              <Film className="mb-1.5 h-4 w-4 text-[#FFD43B]" />
-              <div className="text-xs font-bold text-white">Auto Reframe 9:16</div>
-              <div className="mt-0.5 text-[11px] text-zinc-400">TikTok, Reels y YouTube Shorts</div>
-            </div>
-
-            <div className="rounded-2xl border border-zinc-800/90 bg-[#181A20]/90 p-3.5">
-              <Subtitles className="mb-1.5 h-4 w-4 text-[#FFD43B]" />
-              <div className="text-xs font-bold text-white">Subtítulos IA</div>
-              <div className="mt-0.5 text-[11px] text-zinc-400">Karaoke ASS + Marca de agua</div>
-            </div>
-
-            <div className="rounded-2xl border border-zinc-800/90 bg-[#181A20]/90 p-3.5">
-              <Cpu className="mb-1.5 h-4 w-4 text-[#FFD43B]" />
-              <div className="text-xs font-bold text-white">Motor Privado</div>
-              <div className="mt-0.5 text-[11px] text-zinc-400">0 créditos • 100% Ilimitado</div>
-            </div>
-          </div>
-
-          <div className="mt-6 flex items-center justify-between border-t border-zinc-800/70 pt-4 text-[11px] text-zinc-500">
-            <span className="flex items-center gap-1.5 text-emerald-400">
-              <CheckCircle2 className="h-3.5 w-3.5" /> Workers & FFmpeg Pipeline Online
-            </span>
-            <span>Banana Clips v2.5 Pro</span>
           </div>
         </div>
 
