@@ -54,6 +54,8 @@ export default function SettingsPage() {
   const [tgAutoSendLive, setTgAutoSendLive] = useState(true);
   const [tgAutoSendAiClips, setTgAutoSendAiClips] = useState(true);
   const [tgIncludeHashtags, setTgIncludeHashtags] = useState(true);
+  const [tgBotUsername, setTgBotUsername] = useState('');
+  const [tgBotVerified, setTgBotVerified] = useState(false);
 
   // 3. Clipper Defaults State (Formato 9:16, Split, Corner, Clips, Duración)
   const [defaultClipDurationSec, setDefaultClipDurationSec] = useState<number>(30);
@@ -108,23 +110,51 @@ export default function SettingsPage() {
   const loadAllSettings = async () => {
     setLoading(true);
     try {
-      const [prefRes, chRes, dashRes] = await Promise.all([
+      // Load local cache first so UI never flashes empty
+      try {
+        const cached = localStorage.getItem('banana_telegram_config');
+        if (cached) {
+          const parsedCache = JSON.parse(cached);
+          if (parsedCache.botToken) setTgBotToken(parsedCache.botToken);
+          if (parsedCache.chatId) setTgChatId(parsedCache.chatId);
+        }
+      } catch {}
+
+      const [prefRes, tgDirectRes, chRes, dashRes] = await Promise.all([
         apiFetch<any>('/settings/preferences').catch(() => null),
+        apiFetch<{ config: any }>('/social/telegram-config').catch(() => null),
         apiFetch<{ channels: any[] }>('/channel-watcher').catch(() => ({ channels: [] })),
         apiFetch<any>('/dashboard').catch(() => null),
       ]);
+
+      const tgSource = prefRes?.telegramConfig?.botToken
+        ? prefRes.telegramConfig
+        : tgDirectRes?.config?.botToken
+          ? tgDirectRes.config
+          : prefRes?.telegramConfig || tgDirectRes?.config;
+
+      if (tgSource) {
+        if (tgSource.botToken) setTgBotToken(tgSource.botToken);
+        if (tgSource.chatId) setTgChatId(tgSource.chatId);
+        setTgAutoSendLive(tgSource.autoSendLiveClips !== false);
+        setTgAutoSendAiClips(tgSource.autoSendAiClips !== false);
+        setTgIncludeHashtags(tgSource.includeViralHashtags !== false);
+        setTgBotUsername(tgSource.botUsername || '');
+        setTgBotVerified(Boolean(tgSource.botVerified));
+        if (tgSource.botToken || tgSource.chatId) {
+          try {
+            localStorage.setItem(
+              'banana_telegram_config',
+              JSON.stringify({ botToken: tgSource.botToken, chatId: tgSource.chatId })
+            );
+          } catch {}
+        }
+      }
 
       if (prefRes) {
         if (prefRes.profile) {
           setFullName(prefRes.profile.fullName || user?.fullName || '');
           setEmail(prefRes.profile.email || user?.email || '');
-        }
-        if (prefRes.telegramConfig) {
-          setTgBotToken(prefRes.telegramConfig.botToken || '');
-          setTgChatId(prefRes.telegramConfig.chatId || '');
-          setTgAutoSendLive(prefRes.telegramConfig.autoSendLiveClips !== false);
-          setTgAutoSendAiClips(prefRes.telegramConfig.autoSendAiClips !== false);
-          setTgIncludeHashtags(prefRes.telegramConfig.includeViralHashtags !== false);
         }
         if (prefRes.clipperPresets) {
           const cp = prefRes.clipperPresets;
@@ -186,13 +216,22 @@ export default function SettingsPage() {
     setMessage(null);
     setErrorMsg(null);
     try {
-      const res = await apiFetch<{ saved: boolean; message: string }>('/settings/preferences', {
+      const cleanToken = tgBotToken.trim();
+      const cleanChatId = tgChatId.trim();
+      try {
+        localStorage.setItem(
+          'banana_telegram_config',
+          JSON.stringify({ botToken: cleanToken, chatId: cleanChatId })
+        );
+      } catch {}
+
+      const res = await apiFetch<{ saved: boolean; message: string; telegramConfig?: any }>('/settings/preferences', {
         method: 'PUT',
         body: JSON.stringify({
           profile: { fullName, email },
           telegramConfig: {
-            botToken: tgBotToken.trim(),
-            chatId: tgChatId.trim(),
+            botToken: cleanToken,
+            chatId: cleanChatId,
             autoSendLiveClips: tgAutoSendLive,
             autoSendAiClips: tgAutoSendAiClips,
             includeViralHashtags: tgIncludeHashtags,
@@ -230,6 +269,12 @@ export default function SettingsPage() {
           },
         }),
       });
+      if (res.telegramConfig) {
+        setTgBotToken(res.telegramConfig.botToken || cleanToken);
+        setTgChatId(res.telegramConfig.chatId || cleanChatId);
+        setTgBotUsername(res.telegramConfig.botUsername || '');
+        setTgBotVerified(Boolean(res.telegramConfig.botVerified));
+      }
       setMessage(res.message || '✅ Configuraciones guardadas correctamente.');
     } catch (err: any) {
       setErrorMsg(err?.message || 'Error al guardar las configuraciones.');
@@ -238,7 +283,7 @@ export default function SettingsPage() {
     }
   };
 
-  const handleTestTelegramSend = async () => {
+  const handleTestTelegramSend = async (testMessageOnly = false) => {
     setTestingTg(true);
     setMessage(null);
     setErrorMsg(null);
@@ -249,9 +294,10 @@ export default function SettingsPage() {
         body: JSON.stringify({
           botToken: tgBotToken.trim(),
           chatId: tgChatId.trim(),
+          testMessageOnly,
         }),
       });
-      setMessage(res.message || '✅ Último clip enviado con éxito a tu Telegram.');
+      setMessage(res.message || '✅ Prueba enviada con éxito a tu Telegram.');
     } catch (err: any) {
       setErrorMsg(err?.message || 'No se pudo enviar la prueba a Telegram. Verifica tu Bot Token y Chat ID.');
     } finally {
@@ -564,11 +610,21 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   disabled={testingTg || !tgBotToken.trim() || !tgChatId.trim()}
-                  onClick={handleTestTelegramSend}
-                  className="flex items-center gap-2 rounded-xl border border-sky-500/40 bg-sky-500/15 px-5 py-2.5 text-xs font-bold text-sky-300 hover:bg-sky-500/30 disabled:opacity-40"
+                  onClick={() => handleTestTelegramSend(true)}
+                  className="flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-2.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40"
+                >
+                  {testingTg ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>🔍 Verificar Conexión (Mensaje)</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={testingTg || !tgBotToken.trim() || !tgChatId.trim()}
+                  onClick={() => handleTestTelegramSend(false)}
+                  className="flex items-center gap-2 rounded-xl border border-sky-500/40 bg-sky-500/15 px-4 py-2.5 text-xs font-bold text-sky-300 hover:bg-sky-500/30 disabled:opacity-40"
                 >
                   {testingTg ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  <span>{testingTg ? 'Enviando video de prueba...' : '📲 Probar Envío con mi Último Clip'}</span>
+                  <span>📲 Probar Envío con mi Último Clip</span>
                 </button>
               </div>
             </div>

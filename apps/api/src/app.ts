@@ -91,6 +91,158 @@ export async function createBananaApiApp(): Promise<Express> {
 
   const router = express.Router();
 
+  const telegramConfigDiskPath = path.join(storageRoot, 'telegram_config.json');
+
+  const parseJsonbSafe = <T = any>(val: any, fallback: T): T => {
+    if (val === null || val === undefined) return fallback;
+    if (typeof val === 'object') return val as T;
+    if (typeof val === 'string') {
+      try {
+        const parsed = JSON.parse(val);
+        if (typeof parsed === 'string') {
+          try {
+            return JSON.parse(parsed) as T;
+          } catch {
+            return fallback;
+          }
+        }
+        return (parsed ?? fallback) as T;
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  };
+
+  const readTelegramConfigForUser = async (userId?: string) => {
+    const config = {
+      botToken: '',
+      chatId: '',
+      autoSendLiveClips: true,
+      autoSendAiClips: true,
+      includeViralHashtags: true,
+      botUsername: '',
+      botVerified: false,
+    };
+
+    // 1. Read disk backup (/data/telegram_config.json) if present
+    try {
+      if (fs.existsSync(telegramConfigDiskPath)) {
+        const raw = fs.readFileSync(telegramConfigDiskPath, 'utf8');
+        const diskCfg = parseJsonbSafe<any>(raw, {});
+        if (diskCfg && typeof diskCfg === 'object') {
+          if (diskCfg.botToken) config.botToken = String(diskCfg.botToken).trim();
+          if (diskCfg.chatId) config.chatId = String(diskCfg.chatId).trim();
+          if (typeof diskCfg.autoSendLiveClips === 'boolean') config.autoSendLiveClips = diskCfg.autoSendLiveClips;
+          if (typeof diskCfg.autoSendAiClips === 'boolean') config.autoSendAiClips = diskCfg.autoSendAiClips;
+          if (typeof diskCfg.includeViralHashtags === 'boolean') config.includeViralHashtags = diskCfg.includeViralHashtags;
+          if (diskCfg.botUsername) config.botUsername = String(diskCfg.botUsername);
+          if (typeof diskCfg.botVerified === 'boolean') config.botVerified = diskCfg.botVerified;
+        }
+      }
+    } catch {}
+
+    // 2. Read from SystemSetting (both global fallback and user-specific key)
+    try {
+      const keys = userId ? [`telegram_config_${userId}`, 'telegram_config_default'] : ['telegram_config_default'];
+      const tgRes = await db.query<{ key: string; valueJson: any }>(
+        `SELECT key, "valueJson" FROM "SystemSetting" WHERE key = ANY($1::text[]) OR key LIKE 'telegram_config_%' ORDER BY "updatedAt" DESC LIMIT 5`,
+        [keys]
+      );
+      for (const row of tgRes.rows) {
+        const parsed = parseJsonbSafe<any>(row.valueJson, {});
+        if (parsed && typeof parsed === 'object') {
+          if (!config.botToken && parsed.botToken) config.botToken = String(parsed.botToken).trim();
+          if (!config.chatId && parsed.chatId) config.chatId = String(parsed.chatId).trim();
+          if (row.key === (userId ? `telegram_config_${userId}` : 'telegram_config_default')) {
+            if (parsed.botToken !== undefined && String(parsed.botToken).trim() !== '') {
+              config.botToken = String(parsed.botToken).trim();
+            }
+            if (parsed.chatId !== undefined && String(parsed.chatId).trim() !== '') {
+              config.chatId = String(parsed.chatId).trim();
+            }
+            if (typeof parsed.autoSendLiveClips === 'boolean') config.autoSendLiveClips = parsed.autoSendLiveClips;
+            if (typeof parsed.autoSendAiClips === 'boolean') config.autoSendAiClips = parsed.autoSendAiClips;
+            if (typeof parsed.includeViralHashtags === 'boolean') config.includeViralHashtags = parsed.includeViralHashtags;
+            if (parsed.botUsername) config.botUsername = String(parsed.botUsername);
+            if (typeof parsed.botVerified === 'boolean') config.botVerified = parsed.botVerified;
+          }
+        }
+      }
+    } catch {}
+
+    return config;
+  };
+
+  const writeTelegramConfigForUser = async (userId: string, input: any) => {
+    const current = await readTelegramConfigForUser(userId);
+    const botToken =
+      input?.botToken !== undefined ? String(input.botToken).trim() : current.botToken;
+    const chatId =
+      input?.chatId !== undefined ? String(input.chatId).trim() : current.chatId;
+
+    let botUsername = current.botUsername || '';
+    let botVerified = false;
+    let botVerifyError = '';
+
+    if (botToken) {
+      try {
+        const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(5000),
+        });
+        const meData: any = await meRes.json().catch(() => ({}));
+        if (meRes.ok && meData?.ok) {
+          botVerified = true;
+          botUsername = meData?.result?.username ? `@${meData.result.username}` : meData?.result?.first_name || 'Bot Activo';
+        } else {
+          botVerified = false;
+          botVerifyError = meData?.description || '401 Unauthorized (verifica el token en @BotFather)';
+        }
+      } catch (e: any) {
+        botVerifyError = e?.message || 'No se pudo contactar api.telegram.org';
+      }
+    }
+
+    const tgVal = {
+      botToken,
+      chatId,
+      autoSendLiveClips:
+        input?.autoSendLiveClips !== undefined ? Boolean(input.autoSendLiveClips) : current.autoSendLiveClips,
+      autoSendAiClips:
+        input?.autoSendAiClips !== undefined ? Boolean(input.autoSendAiClips) : current.autoSendAiClips,
+      includeViralHashtags:
+        input?.includeViralHashtags !== undefined ? Boolean(input.includeViralHashtags) : current.includeViralHashtags,
+      botUsername,
+      botVerified,
+      botVerifyError,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // 1. Save to persistent file /data/telegram_config.json
+    try {
+      fs.writeFileSync(telegramConfigDiskPath, JSON.stringify(tgVal, null, 2), 'utf8');
+    } catch {}
+
+    // 2. Save to SystemSetting for both user and global studio default
+    for (const tgKey of [`telegram_config_${userId}`, 'telegram_config_default']) {
+      const exists = await db.query(`SELECT id FROM "SystemSetting" WHERE key = $1 LIMIT 1`, [tgKey]);
+      if (exists.rows.length === 0) {
+        await db.query(
+          `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, $2, $3::jsonb, $4)`,
+          [crypto.randomUUID(), tgKey, JSON.stringify(tgVal), 'Configuración de Bot de Telegram Directo']
+        );
+      } else {
+        await db.query(
+          `UPDATE "SystemSetting" SET "valueJson" = $1::jsonb, "updatedAt" = CURRENT_TIMESTAMP WHERE key = $2`,
+          [JSON.stringify(tgVal), tgKey]
+        );
+      }
+    }
+
+    return tgVal;
+  };
+
   // ===========================================================================
   // HEALTH & OPENAPI SPECIFICATION
   // ===========================================================================
@@ -422,11 +574,7 @@ export async function createBananaApiApp(): Promise<Express> {
       `SELECT id, username, email, "fullName", "brandKit", "projectPresets" FROM "User" WHERE id = $1 LIMIT 1`,
       [userId]
     );
-    const tgRes = await db.query<{ valueJson: string }>(
-      `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
-      [`telegram_config_${userId}`]
-    );
-    const aiRes = await db.query<{ valueJson: string }>(
+    const aiRes = await db.query<{ valueJson: any }>(
       `SELECT "valueJson" FROM "SystemSetting" WHERE key = 'ai_config' LIMIT 1`
     );
 
@@ -443,10 +591,7 @@ export async function createBananaApiApp(): Promise<Express> {
       captionPresetId: 'WordCut',
     };
     if (userRow.brandKit) {
-      try {
-        const parsed = typeof userRow.brandKit === 'string' ? JSON.parse(userRow.brandKit) : userRow.brandKit;
-        brandKit = { ...brandKit, ...parsed };
-      } catch {}
+      brandKit = { ...brandKit, ...parseJsonbSafe(userRow.brandKit, {}) };
     }
 
     let clipperPresets = {
@@ -464,25 +609,10 @@ export async function createBananaApiApp(): Promise<Express> {
       defaultBackgroundMusic: 'NONE',
     };
     if (userRow.projectPresets) {
-      try {
-        const parsed =
-          typeof userRow.projectPresets === 'string' ? JSON.parse(userRow.projectPresets) : userRow.projectPresets;
-        clipperPresets = { ...clipperPresets, ...parsed };
-      } catch {}
+      clipperPresets = { ...clipperPresets, ...parseJsonbSafe(userRow.projectPresets, {}) };
     }
 
-    let telegramConfig = {
-      botToken: '',
-      chatId: '',
-      autoSendLiveClips: true,
-      autoSendAiClips: true,
-      includeViralHashtags: true,
-    };
-    if (tgRes.rows[0]?.valueJson) {
-      try {
-        telegramConfig = { ...telegramConfig, ...JSON.parse(tgRes.rows[0].valueJson) };
-      } catch {}
-    }
+    const telegramConfig = await readTelegramConfigForUser(userId);
 
     let aiEngineConfig = {
       primaryBrain: 'CLAUDE_5_5_AND_NIM_FREE',
@@ -494,10 +624,7 @@ export async function createBananaApiApp(): Promise<Express> {
       hasXaiGrokKey: Boolean(process.env.XAI_API_KEY),
     };
     if (aiRes.rows[0]?.valueJson) {
-      try {
-        const parsed = typeof aiRes.rows[0].valueJson === 'string' ? JSON.parse(aiRes.rows[0].valueJson) : aiRes.rows[0].valueJson;
-        aiEngineConfig = { ...aiEngineConfig, ...parsed };
-      } catch {}
+      aiEngineConfig = { ...aiEngineConfig, ...parseJsonbSafe(aiRes.rows[0].valueJson, {}) };
     }
 
     return res.json({
@@ -530,60 +657,48 @@ export async function createBananaApiApp(): Promise<Express> {
 
     if (brandKit) {
       await db.query(
-        `UPDATE "User" SET "brandKit" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+        `UPDATE "User" SET "brandKit" = $1::jsonb, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
         [JSON.stringify(brandKit), userId]
       );
     }
 
     if (clipperPresets) {
       await db.query(
-        `UPDATE "User" SET "projectPresets" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
+        `UPDATE "User" SET "projectPresets" = $1::jsonb, "updatedAt" = CURRENT_TIMESTAMP WHERE id = $2`,
         [JSON.stringify(clipperPresets), userId]
       );
     }
 
+    let savedTelegramConfig: any = null;
     if (telegramConfig) {
-      const tgKey = `telegram_config_${userId}`;
-      const tgVal = {
-        botToken: String(telegramConfig.botToken || '').trim(),
-        chatId: String(telegramConfig.chatId || '').trim(),
-        autoSendLiveClips: telegramConfig.autoSendLiveClips !== false,
-        autoSendAiClips: telegramConfig.autoSendAiClips !== false,
-        includeViralHashtags: telegramConfig.includeViralHashtags !== false,
-        updatedAt: new Date().toISOString(),
-      };
-      const exists = await db.query(`SELECT id FROM "SystemSetting" WHERE key = $1 LIMIT 1`, [tgKey]);
-      if (exists.rows.length === 0) {
-        await db.query(
-          `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, $2, $3, $4)`,
-          [crypto.randomUUID(), tgKey, JSON.stringify(tgVal), 'Configuración de Bot de Telegram Directo']
-        );
-      } else {
-        await db.query(
-          `UPDATE "SystemSetting" SET "valueJson" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE key = $2`,
-          [JSON.stringify(tgVal), tgKey]
-        );
-      }
+      savedTelegramConfig = await writeTelegramConfigForUser(userId, telegramConfig);
     }
 
     if (aiEngineConfig) {
       const aiExists = await db.query(`SELECT id FROM "SystemSetting" WHERE key = 'ai_config' LIMIT 1`);
       if (aiExists.rows.length === 0) {
         await db.query(
-          `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, 'ai_config', $2, $3)`,
+          `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, 'ai_config', $2::jsonb, $3)`,
           [crypto.randomUUID(), JSON.stringify(aiEngineConfig), 'Configuración de Motores IA y Ahorro de Créditos']
         );
       } else {
         await db.query(
-          `UPDATE "SystemSetting" SET "valueJson" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE key = 'ai_config'`,
+          `UPDATE "SystemSetting" SET "valueJson" = $1::jsonb, "updatedAt" = CURRENT_TIMESTAMP WHERE key = 'ai_config'`,
           [JSON.stringify(aiEngineConfig)]
         );
       }
     }
 
+    const tgSuffix = savedTelegramConfig?.botToken
+      ? savedTelegramConfig.botVerified
+        ? ` (Bot conectado: ${savedTelegramConfig.botUsername})`
+        : ` (Credenciales guardadas; aviso de Telegram: ${savedTelegramConfig.botVerifyError})`
+      : '';
+
     return res.json({
       saved: true,
-      message: '✅ Todas las configuraciones del estudio fueron guardadas correctamente.',
+      telegramConfig: savedTelegramConfig,
+      message: `✅ Todas las configuraciones del estudio fueron guardadas correctamente${tgSuffix}.`,
     });
   });
 
@@ -1552,19 +1667,19 @@ export async function createBananaApiApp(): Promise<Express> {
 
     const autoNotifyTelegramOnJobDone = async (uid: string, vid: string) => {
       try {
-        const cfgRes = await db.query<{ valueJson: string }>(
-          `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
-          [`telegram_config_${uid}`]
-        );
-        if (!cfgRes.rows[0]?.valueJson) return;
-        const parsed = JSON.parse(cfgRes.rows[0].valueJson);
-        if (parsed.autoSendLiveClips === false || !parsed.botToken || !parsed.chatId) return;
+        const parsed = await readTelegramConfigForUser(uid);
+        if (parsed.autoSendAiClips === false || !parsed.botToken || !parsed.chatId) return;
         const newClips = await db.query<{ id: string }>(
           `SELECT id FROM "Clip" WHERE "videoId" = $1 ORDER BY "createdAt" DESC LIMIT 3`,
           [vid]
         );
         for (const c of newClips.rows) {
-          await sendClipToTelegramHelperAsync({ userId: uid, clipId: c.id });
+          await sendClipToTelegramHelperAsync({
+            userId: uid,
+            clipId: c.id,
+            overrideBotToken: parsed.botToken,
+            overrideChatId: parsed.chatId,
+          });
         }
       } catch {}
     };
@@ -2188,17 +2303,9 @@ export async function createBananaApiApp(): Promise<Express> {
     let chatId = (params.overrideChatId || '').trim();
 
     if (!botToken || !chatId) {
-      const cfgRes = await db.query<{ valueJson: string }>(
-        `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
-        [`telegram_config_${params.userId}`]
-      );
-      if (cfgRes.rows[0]?.valueJson) {
-        try {
-          const parsed = JSON.parse(cfgRes.rows[0].valueJson);
-          if (!botToken) botToken = String(parsed.botToken || '').trim();
-          if (!chatId) chatId = String(parsed.chatId || '').trim();
-        } catch {}
-      }
+      const parsed = await readTelegramConfigForUser(params.userId);
+      if (!botToken) botToken = String(parsed.botToken || '').trim();
+      if (!chatId) chatId = String(parsed.chatId || '').trim();
     }
 
     if (!botToken || !chatId) {
@@ -2571,20 +2678,14 @@ export async function createBananaApiApp(): Promise<Express> {
         // If user enabled Auto-Telegram Push for Live Clipper, send the clip automatically in the background
         setImmediate(async () => {
           try {
-            const cfgRes = await db.query<{ valueJson: string }>(
-              `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
-              [`telegram_config_${params.userId}`]
-            );
-            if (cfgRes.rows[0]?.valueJson) {
-              const parsed = JSON.parse(cfgRes.rows[0].valueJson);
-              if (parsed.autoSendLiveClips && parsed.botToken && parsed.chatId) {
-                await sendClipToTelegramHelperAsync({
-                  userId: params.userId,
-                  clipId,
-                  overrideBotToken: parsed.botToken,
-                  overrideChatId: parsed.chatId,
-                });
-              }
+            const parsed = await readTelegramConfigForUser(params.userId);
+            if (parsed.autoSendLiveClips !== false && parsed.botToken && parsed.chatId) {
+              await sendClipToTelegramHelperAsync({
+                userId: params.userId,
+                clipId,
+                overrideBotToken: parsed.botToken,
+                overrideChatId: parsed.chatId,
+              });
             }
           } catch {}
         });
@@ -3805,51 +3906,31 @@ export async function createBananaApiApp(): Promise<Express> {
 
   // Feature 5: Telegram Bot Direct Push ("Del Servidor a tu Celular en 1 Clic")
   router.get('/social/telegram-config', requireAuth, async (req: AuthenticatedRequest, res) => {
-    const cfgRes = await db.query<{ valueJson: string }>(
-      `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
-      [`telegram_config_${req.user!.sub}`]
-    );
-    let config = { botToken: '', chatId: '', autoSendLiveClips: true };
-    if (cfgRes.rows[0]?.valueJson) {
-      try {
-        config = { ...config, ...JSON.parse(cfgRes.rows[0].valueJson) };
-      } catch {}
-    }
+    const config = await readTelegramConfigForUser(req.user!.sub);
     return res.json({ config });
   });
 
   router.post('/social/telegram-config', requireAuth, async (req: AuthenticatedRequest, res) => {
-    const { botToken = '', chatId = '', autoSendLiveClips = true } = req.body || {};
-    const key = `telegram_config_${req.user!.sub}`;
-    const valueObj = {
-      botToken: String(botToken).trim(),
-      chatId: String(chatId).trim(),
-      autoSendLiveClips: Boolean(autoSendLiveClips),
-      updatedAt: new Date().toISOString(),
-    };
-    const exists = await db.query(`SELECT id FROM "SystemSetting" WHERE key = $1 LIMIT 1`, [key]);
-    if (exists.rows.length === 0) {
-      await db.query(
-        `INSERT INTO "SystemSetting" ("id", "key", "valueJson", "description") VALUES ($1, $2, $3, $4)`,
-        [crypto.randomUUID(), key, JSON.stringify(valueObj), 'Configuración de Bot de Telegram Directo']
-      );
-    } else {
-      await db.query(
-        `UPDATE "SystemSetting" SET "valueJson" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE key = $2`,
-        [JSON.stringify(valueObj), key]
-      );
-    }
+    const valueObj = await writeTelegramConfigForUser(req.user!.sub, req.body || {});
     return res.json({
       saved: true,
       config: valueObj,
-      message: '✅ Configuración de Bot de Telegram guardada correctamente.',
+      message: valueObj.botVerified
+        ? `✅ Configuración de Telegram guardada y verificada (${valueObj.botUsername}).`
+        : '✅ Configuración de Bot de Telegram guardada correctamente.',
     });
   });
 
   router.post('/social/telegram-send', requireAuth, async (req: AuthenticatedRequest, res) => {
-    const { clipId, botToken, chatId } = req.body || {};
-    let targetClipId = clipId;
-    if (!targetClipId) {
+    const { clipId, botToken, chatId, testMessageOnly } = req.body || {};
+
+    // Always persist any provided botToken/chatId first so user never loses what they typed
+    if (botToken && chatId) {
+      await writeTelegramConfigForUser(req.user!.sub, { botToken, chatId }).catch(() => {});
+    }
+
+    let targetClipId = testMessageOnly ? null : clipId;
+    if (!targetClipId && !testMessageOnly) {
       const latest = await db.query<{ id: string }>(
         `SELECT id FROM "Clip" WHERE "userId" = $1 AND "isTrash" = false ORDER BY "createdAt" DESC LIMIT 1`,
         [req.user!.sub]
@@ -3860,17 +3941,9 @@ export async function createBananaApiApp(): Promise<Express> {
       let bt = String(botToken || '').trim();
       let cid = String(chatId || '').trim();
       if (!bt || !cid) {
-        const cfgRes = await db.query<{ valueJson: string }>(
-          `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
-          [`telegram_config_${req.user!.sub}`]
-        );
-        if (cfgRes.rows[0]?.valueJson) {
-          try {
-            const parsed = JSON.parse(cfgRes.rows[0].valueJson);
-            if (!bt) bt = String(parsed.botToken || '').trim();
-            if (!cid) cid = String(parsed.chatId || '').trim();
-          } catch {}
-        }
+        const parsed = await readTelegramConfigForUser(req.user!.sub);
+        if (!bt) bt = String(parsed.botToken || '').trim();
+        if (!cid) cid = String(parsed.chatId || '').trim();
       }
       if (!bt || !cid) {
         return res.status(400).json({
@@ -3886,7 +3959,7 @@ export async function createBananaApiApp(): Promise<Express> {
       if (!meRes || !meRes.ok || !meData?.ok) {
         return res.status(400).json({
           ok: false,
-          message: `Token de Bot de Telegram inválido o revocado (${meData?.description || '401 Unauthorized'}). Abre @BotFather en Telegram, escribe /token o /newbot y pega el token exacto.`,
+          message: `💾 Credenciales guardadas, pero Telegram rechazó el Bot Token (${meData?.description || '401 Unauthorized'}). Abre @BotFather en Telegram, escribe /token o /newbot y pega el token exacto.`,
         });
       }
       const botUsername = meData?.result?.username ? `@${meData.result.username}` : 'tu Bot';
@@ -3923,17 +3996,13 @@ export async function createBananaApiApp(): Promise<Express> {
   // Feature 6: 24/7 Auto-Channel Watcher (Vigilante Automático de Canales de YouTube / Twitch)
   const getWatchedChannelsForUser = async (userId: string): Promise<any[]> => {
     const key = `channel_watcher_${userId}`;
-    const r = await db.query<{ valueJson: string }>(
+    const r = await db.query<{ valueJson: any }>(
       `SELECT "valueJson" FROM "SystemSetting" WHERE key = $1 LIMIT 1`,
       [key]
     );
     if (!r.rows[0]?.valueJson) return [];
-    try {
-      const parsed = JSON.parse(r.rows[0].valueJson);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
+    const parsed = parseJsonbSafe(r.rows[0].valueJson, []);
+    return Array.isArray(parsed) ? parsed : [];
   };
 
   const saveWatchedChannelsForUser = async (userId: string, channels: any[]) => {
